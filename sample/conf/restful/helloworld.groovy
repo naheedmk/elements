@@ -14,15 +14,35 @@
  * limitations under the License.
  */
 
+package  net.e6tech.sample.web.cxf
+
 import net.e6tech.elements.web.cxf.JaxRSServer
+import net.e6tech.elements.web.cxf.SecurityAnnotationEngine
+import net.e6tech.sample.web.cxf.HelloWorld
+import net.e6tech.sample.web.cxf.HelloWorldRoles
+import javax.ws.rs.*
+import javax.ws.rs.core.MediaType
+
+helloWorldPort = 19001
+roleMap = [(HelloWorld.getName()): HelloWorldRoles]
 
 atom("helloWorld") {
     configuration =  """
+    _prototype.extraMessage: '...What a sunny day!'
     _helloWorld.addresses:
-        - "http://0.0.0.0:19001/restful/"
+        - "http://0.0.0.0:${helloWorldPort}/restful/"
     _helloWorld.resources:
         - class: "net.e6tech.sample.web.cxf.HelloWorld"
           singleton: false
+          prototype: ^_prototype
+    _helloWorld.responseHeaders:
+        'X' : 'X val'
+        'Y' : 'Y val'
+    # _helloWorld.serverEngineClass: net.e6tech.elements.web.cxf.tomcat.TomcatEngine
+    _securityAnnotation.securityProviders: ^roleMap
  """
+    _prototype = HelloWorld
+    _securityAnnotation = SecurityAnnotationEngine
     _helloWorld = JaxRSServer
 }
+

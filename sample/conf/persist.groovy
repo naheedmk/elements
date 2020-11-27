@@ -14,14 +14,16 @@
  * limitations under the License.
  */
 
-import com.zaxxer.hikari.HikariDataSource
-import com.mchange.v2.c3p0.ComboPooledDataSource
+import net.e6tech.elements.persist.datasource.hikari.ElementsHikariDataSource
 import javax.persistence.EntityManager
 import net.e6tech.elements.persist.hibernate.HibernateEntityManagerProvider
 import net.e6tech.elements.persist.hibernate.TableIdGenerator
+import net.e6tech.elements.persist.InvocationListener
+
+import java.lang.reflect.Method
 
 atom("datasource") {
-    /*
+    /* below is for Hikari */
     configuration = """
         dataSource:
             driverClassName: org.mariadb.jdbc.Driver
@@ -29,9 +31,10 @@ atom("datasource") {
             password: password
             jdbcUrl: "jdbc:mariadb://127.0.0.1:3306/sample"
             maximumPoolSize: $dataSourceMaxPoolSize
+            transactionIsolation: 'TRANSACTION_READ_COMMITTED'
     """
-    */
 
+    /* below is for c3p0
     configuration = """
         dataSource:
             driverClassName: org.mariadb.jdbc.Driver
@@ -42,14 +45,56 @@ atom("datasource") {
             checkoutTimeout: 30000
             autoCommitOnClose: false
     """
-    // delegate["dataSource"] = HikariDataSource or dataSource = HikariDataSource
-    dataSource = ComboPooledDataSource
+    */
+
+    dataSource = ElementsHikariDataSource
+    //  To set init statements
+    // dataSource.connectionInitStatements = dataSourceConnectionInitStatements
+    // dataSource = ComboPooledDataSource
 }
 
+class Listener implements InvocationListener {
+
+    void beforeInvocation(Class callingClass, Object proxy, Method method, Object[] args) {
+        println "Before invocation " + proxy.getClass().getName() + "::" + method.getName()
+    }
+
+    void afterInvocation(Class callingClass, Object proxy, Method method, Object[] args, Object returnValue) {
+        println "After invocation " + proxy.getClass().getName() + "::" + method.getName();
+    }
+
+    void onException(Class callingClass, Object proxy, Method method, Object[] args, Throwable ex) {
+
+    }
+}
+
+atom("persist")
+        .settings([
+                unitName: 'sample',
+                txTimout: entityManagerTxTimeout,
+                monitorTransaction: entityManagerMonitorTransaction,
+                longTransaction: entityManagerLongTransaction,
+                providerName: 'default',
+                dataSourceName: 'dataSource',
+                beanName: 'entityManagerProvider'])
+        .from("$__dir/persist_prototype")
+        .build() {
+            postInit {
+                // testing if EntityManager can be created correctly
+                open({ resources ->
+                    EntityManager em = resources.getInstance(EntityManager)
+                    resources.abort()
+                })
+            }
+        }
+
+/*
 atom("persist") {
 
     configuration = """
         entityManagerProvider.persistenceUnitName: sample
+        entityManagerProvider.entityManagerListener: ^_emListener
+        entityManagerProvider.queryListener: ^_queryListener
         entityManagerProvider.transactionTimeout: ${entityManagerTxTimeout}
         entityManagerProvider.monitorTransaction: ${entityManagerMonitorTransaction}
         entityManagerProvider.longTransaction: ${entityManagerLongTransaction}
@@ -62,10 +107,14 @@ atom("persist") {
             defaultIncrementSize: 30
     """
 
+    _emListener = Listener
+    _queryListener = Listener
+
     entityManagerProvider = HibernateEntityManagerProvider
 
     _tableId = TableIdGenerator
     _tableId2 = TableIdGenerator
+
     entityManagerProvider.register('tableId', _tableId)
             .register('tableId2', _tableId2)
 
@@ -77,3 +126,7 @@ atom("persist") {
         })
     }
 }
+
+ */
+
+

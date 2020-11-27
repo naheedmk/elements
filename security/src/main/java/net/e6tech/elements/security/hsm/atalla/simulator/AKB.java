@@ -16,14 +16,13 @@
 
 package net.e6tech.elements.security.hsm.atalla.simulator;
 
-import net.e6tech.elements.common.logging.Logger;
 import net.e6tech.elements.security.Hex;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.Key;
 
@@ -34,7 +33,7 @@ public class AKB {
     public static final String DES_EDE_CBC_NO_PADDING = "DESede/CBC/NoPadding";
     public static final String ALGORITHM_DES_EDE = "DESede";
     private String keyBlock;
-    String checkDigit;
+    String checkDigits;
 
     public AKB(String keyBlock) {
         this.keyBlock = keyBlock;
@@ -42,7 +41,7 @@ public class AKB {
 
     public AKB(String header, byte[] keyEncryptionkey, byte[] key) throws GeneralSecurityException {
         keyBlock = generateAKB(header, keyEncryptionkey, key);
-        checkDigit = calculateCheckDigits(key);
+        checkDigits = calculateCheckDigits(key);
     }
 
     public static byte[] normalizeKey(byte[] key) throws GeneralSecurityException {
@@ -66,8 +65,8 @@ public class AKB {
         return keyBlock;
     }
 
-    public String getCheckDigit() {
-        return checkDigit;
+    public String getCheckDigits() {
+        return checkDigits;
     }
 
     public String getHeader() {
@@ -84,12 +83,7 @@ public class AKB {
 
     @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S1067"})
     public byte[] decryptKey(byte[] keyEncryptionKey) throws GeneralSecurityException {
-        byte[] headerBytes = new byte[0];
-        try {
-            headerBytes = getHeader().getBytes("UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            Logger.suppress(e);
-        }
+        byte[] headerBytes = getHeader().getBytes(StandardCharsets.UTF_8);
         IvParameterSpec ivSpec = new IvParameterSpec(headerBytes);
         Cipher cipher = Cipher.getInstance(DES_EDE_CBC_NO_PADDING);
         byte[] xorMKey = maskAKBEncryptionKey(keyEncryptionKey, Hex.toBytes("45")[0]);
@@ -118,8 +112,8 @@ public class AKB {
         String mac = generateAKB(getHeader(), keyEncryptionKey, key).split(",")[2];
         if (!mac.equals(getMac())) 
             throw new GeneralSecurityException("Mac not verified");
-        if (checkDigit == null)
-            checkDigit = calculateCheckDigits(key);
+        if (checkDigits == null)
+            checkDigits = calculateCheckDigits(key);
         return key;
     }
 
@@ -143,12 +137,8 @@ public class AKB {
             throw new GeneralSecurityException("Invalid key size=" + key.length);
         }
 
-        byte[] headerBytes = new byte[0];
-        try {
-            headerBytes = header.getBytes("UTF-8");
-        } catch (UnsupportedEncodingException e) {
-            Logger.suppress(e);
-        }
+        byte[] headerBytes = header.getBytes(StandardCharsets.UTF_8);
+
         IvParameterSpec ivSpec = new IvParameterSpec(headerBytes);
         Cipher cipher = Cipher.getInstance(DES_EDE_CBC_NO_PADDING);
         byte[] xorMKey = maskAKBEncryptionKey(keyEncryptionKey, Hex.toBytes("45")[0]);
@@ -192,7 +182,8 @@ public class AKB {
         return Hex.toString(output);
     }
 
-    private String calculateCheckDigits(byte[] key) throws GeneralSecurityException {
+    @SuppressWarnings("squid:S2278")
+    public static String calculateCheckDigits(byte[] key) throws GeneralSecurityException {
         Cipher chkCipher = Cipher.getInstance("DESede/ECB/NoPadding");
         chkCipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(normalizeKey(key), ALGORITHM_DES_EDE));
         byte[] chk = chkCipher.doFinal(new byte[8]);

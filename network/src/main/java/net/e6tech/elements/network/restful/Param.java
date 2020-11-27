@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import net.e6tech.elements.common.util.SystemException;
 import java.io.Serializable;
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 
 /**
  * Created by futeh.
@@ -35,10 +36,10 @@ public class Param implements Serializable{
         this.value = value;
         try {
             if (value != null)
-                this.encodedValue = URLEncoder.encode(value, "UTF-8");
+                this.encodedValue = URLEncoder.encode(value, StandardCharsets.UTF_8.name());
         } catch (UnsupportedEncodingException e) {
             throw new SystemException(e);
-        };
+        }
     }
 
     public String getField() {

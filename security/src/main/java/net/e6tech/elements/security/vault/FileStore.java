@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,9 +21,6 @@ import net.e6tech.elements.common.logging.Logger;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
@@ -41,7 +38,6 @@ public class FileStore implements VaultStore {
     private Map<String, VaultImpl> vaults = new LinkedHashMap<>();
     private Set<String> managedVaults = new HashSet<>();
     private String fileName;
-    private boolean backup = false;
 
     public FileStore() {}
 
@@ -62,11 +58,7 @@ public class FileStore implements VaultStore {
         if (vaultNames == null)
             return this;
         for (String vaultName : vaultNames) {
-            VaultImpl vault = vaults.get(vaultName);
-            if (vault == null) {
-                vault = new VaultImpl();
-                vaults.put(vaultName, vault);
-            }
+            vaults.computeIfAbsent(vaultName, key -> new VaultImpl());
             managedVaults.add(vaultName);
         }
         return this;
@@ -83,11 +75,9 @@ public class FileStore implements VaultStore {
         Vault vault = vaults.get(vaultName);
         if (vault == null && managedVaults.contains(vaultName)) {
             manage(vaultName);
-            return (Vault) Proxy.newProxyInstance(getClass().getClassLoader(), new Class[] {Vault.class}, new VaultInvocationHandler(vaultName));
+            vault = vaults.get(vaultName);
         }
-        if (vault == null)
-            return null;
-        return (Vault) Proxy.newProxyInstance(getClass().getClassLoader(), new Class[] {Vault.class}, new VaultInvocationHandler(vaultName));
+        return vault;
     }
 
     public void backup(String version) throws IOException {
@@ -114,7 +104,7 @@ public class FileStore implements VaultStore {
             if (!file.exists()) {
                 throw new IOException("Vault file does not exist: " + fileName);
             }
-            if (!Files.exists(Paths.get(backupFile)))
+            if (!Paths.get(backupFile).toFile().exists())
                 Files.copy(Paths.get(fileName), Paths.get(backupFile));
         } else {
             File file = new File(backupFile);
@@ -130,23 +120,46 @@ public class FileStore implements VaultStore {
         if (fileName == null)
             throw new IOException("null fileName");
 
-        if (!backup) {
+        boolean shouldBackup = false;
+        for (VaultImpl vault : vaults.values()) {
+            if (vault.isModified()) {
+                shouldBackup = true;
+                break;
+            }
+        }
+
+        if (shouldBackup) {
             File file = new File(fileName);
             if (file.exists()) {
-                SimpleDateFormat format = new SimpleDateFormat("yyyyMMdd-HHmmss");
-                String backupFile;
-                int index = fileName.lastIndexOf('.');
-                if (index > 0) {
-                    String extension = fileName.substring(index);
-                    backupFile = fileName.substring(0, index) + "-" + format.format(new Date()) + extension;
-                } else {
-                    backupFile = fileName + "-" + format.format(new Date());
+                String backupFileName = backupFileName();
+                File backupFile = new File(backupFileName);
+                while (backupFile.exists()) {
+                    try {
+                        Thread.sleep(1000L);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    backupFileName = backupFileName();
+                    backupFile = new File(backupFileName);
                 }
-                Files.copy(Paths.get(fileName), Paths.get(backupFile));
+                Files.copy(Paths.get(fileName), Paths.get(backupFileName));
             }
-            backup = true;
         }
         mapper.writerWithDefaultPrettyPrinter().writeValue(new File(fileName), new VaultFormat(vaults));
+        vaults.values().forEach(vault -> vault.setModified(false));
+    }
+
+    private String backupFileName() {
+        SimpleDateFormat format = new SimpleDateFormat("yyyyMMdd-HHmmss");
+        String backupFile;
+        int index = fileName.lastIndexOf('.');
+        if (index > 0) {
+            String extension = fileName.substring(index);
+            backupFile = fileName.substring(0, index) + "-" + format.format(new Date()) + "-backup" + extension;
+        } else {
+            backupFile = fileName + "-" + format.format(new Date());
+        }
+        return backupFile;
     }
 
     @Override
@@ -154,7 +167,7 @@ public class FileStore implements VaultStore {
         if (fileName == null)
             throw new IOException("null fileName");
 
-        logger.info( "Opening file vault " + fileName);
+        logger.info("Opening file vault {}", fileName);
 
         File file = new File(fileName);
         if (!file.exists()) {
@@ -184,26 +197,6 @@ public class FileStore implements VaultStore {
             return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(new VaultFormat(vaults));
         } catch (JsonProcessingException e) {
             throw new IOException(e);
-        }
-    }
-
-    private class VaultInvocationHandler implements InvocationHandler {
-        String vaultName;
-
-        public VaultInvocationHandler(String vaultName) {
-            this.vaultName = vaultName;
-        }
-
-        @Override
-        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-            VaultImpl impl = vaults.get(vaultName);
-            Object ret = null;
-            if ("getSecretData".equals(method.getName()) && ret == null) {
-                ret = null;
-            } else {
-                ret = method.invoke(impl, args);
-            }
-            return ret;
         }
     }
 }

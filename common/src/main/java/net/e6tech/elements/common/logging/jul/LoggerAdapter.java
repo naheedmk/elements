@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -55,9 +55,15 @@ public class LoggerAdapter extends java.util.logging.Logger {
 
     public void log(Level level, String message, Object[] parameters, Throwable th) {
         if (th != null) {
-            Object[] param = new Object[parameters.length + 1];
-            System.arraycopy(parameters, 0, param, 0, parameters.length);
-            param[parameters.length] = th;
+            Object[] param;
+            if (parameters != null) {
+                param = new Object[parameters.length + 1];
+                System.arraycopy(parameters, 0, param, 0, parameters.length);
+                param[parameters.length] = th;
+            } else {
+                param = new Object[1];
+                param[0] = th;
+            }
             log(level, message, param);
         } else {
             log(level, message, parameters);
@@ -67,7 +73,7 @@ public class LoggerAdapter extends java.util.logging.Logger {
     @Override
     public boolean isLoggable(final Level level) {
         if (Level.ALL.equals(level)) return true;
-        else if (Level.CONFIG.equals(level)) logger.isInfoEnabled();
+        else if (Level.CONFIG.equals(level)) return logger.isInfoEnabled();
         return true;
     }
 

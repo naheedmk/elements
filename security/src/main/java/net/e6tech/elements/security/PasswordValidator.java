@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ public class PasswordValidator {
     private int maxPasswordLength;
     private int minNumberOfGroups;
 
-    private static final PasswordValidator DEFAULT_VALIDATOR = new PasswordValidator(8,20,3);
+    private static final PasswordValidator DEFAULT_VALIDATOR = new PasswordValidator(8,32,3);
 
     public PasswordValidator() {
     }
@@ -57,7 +57,7 @@ public class PasswordValidator {
         this.minNumberOfGroups = minNumberOfGroups;
     }
 
-    @SuppressWarnings("squid:MethodCyclomaticComplexity")
+    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S3776"})
     public boolean check(String pwd) {
         String password = pwd;
         if ((password == null) || (password.length() == 0)) {
@@ -108,7 +108,7 @@ public class PasswordValidator {
         if (nDigits > 0)
             count++;
 
-        return ! (count < minNumberOfGroups);
+        return count >= minNumberOfGroups;
     }
 
     public static boolean validate(String password) {

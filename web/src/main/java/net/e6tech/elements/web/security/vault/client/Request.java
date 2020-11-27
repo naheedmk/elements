@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ public class Request {
 
     String action;
     String clientKey;
+    String authorization;
     String encryptedData;
 
     public String getAction() {
@@ -38,6 +39,14 @@ public class Request {
 
     public void setClientKey(String clientKey) {
         this.clientKey = clientKey;
+    }
+
+    public String getAuthorization() {
+        return authorization;
+    }
+
+    public void setAuthorization(String authorization) {
+        this.authorization = authorization;
     }
 
     public String getEncryptedData() {

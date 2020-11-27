@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,6 +28,6 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 @Target({ TYPE })
 @Retention(RUNTIME)
 public @interface BindClass {
-    Class value() default Void.class;
+    Class value() default void.class;
     boolean generics() default false;
 }

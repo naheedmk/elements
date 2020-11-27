@@ -1,3 +1,53 @@
+ext.elementsVersion = '2.6.14'
+ext.junitPlatformLauncherVersion = '1.6.2'
+ext.junitJupiterVersion = '5.6.2'
+ext.snakeyamlVersion = '1.27'
+ext.simplejndiVersion = '0.11.4.1'
+ext.findbugsVersion = '3.0.2'
+ext.lmaxDisruptorVerions = '3.4.2'
+ext.slf4jVersion = '1.7.30'
+ext.groovyVersion = '3.0.5'
+ext.guavaVerions = '30.0-jre'
+ext.akkaVersion = '2.6.9'
+ext.akkaScalaVersion = '2.13'
+ext.aeronVersion = '1.30.0'
+ext.kryoVersion = '5.0.0-RC9'
+ext.bytebuddyVersion = '1.10.16'
+ext.ehcacheVersion = '3.9.0'
+ext.javaCacheApiVerison = '1.1.1'
+ext.jacksonVersion = '2.11.2'
+ext.jettyVersion = '9.4.31.v20200723'
+ext.tomcatVersion = '9.0.38'
+ext.tomcatLog4jVersion = '9.0.0.M6'
+ext.log4jVersion = '2.13.3'
+ext.cxfVersion = '3.4.0'
+ext.asmVersion = '7.2'
+ext.javaxWsRsApiVersion = '2.1.6'
+ext.cassandraDriver4Version = '4.9.0'
+ext.reactiveStreamsVersion = '1.0.3'
+ext.opendmkVersion = '1.0-b02'
+ext.simplejmxVersion = '1.17'
+ext.quartzVersion = '2.3.2'
+ext.hikariVersion = '3.4.5'
+ext.mariadbClientVersion = '2.6.2'
+ext.javaeeApiVersion = '8.0.1'
+ext.hibernateVersion = '5.4.21.Final'  // note 5.4.6 - 5.4.8 have major stack overflow issues
+ext.bouncycastleVersion = '1.66'
+ext.jaxbVersion = '2.3.0'
+ext.jaxbRuntime = '2.3.3'
+ext.jnrffiVersion = '2.1.16'  // cassandra and akka cluster typed
+
+buildscript {
+    repositories {
+        mavenCentral()
+        maven {
+            url "https://plugins.gradle.org/m2/"
+        }
+    }
+    dependencies {
+        classpath 'org.owasp:dependency-check-gradle:6.0.2'
+    }
+}
 
 allprojects {
     group 'net.e6tech'
@@ -7,21 +57,25 @@ allprojects {
 
     sourceCompatibility = 1.8
 
+    tasks.withType(Javadoc) {
+        options.addStringOption('Xdoclint:syntax', '-quiet')
+    }
+
     repositories {
         mavenCentral()
     }
 }
 
 dependencies {
-    testCompile("org.junit.jupiter:junit-jupiter-api:5.0.0-M4")
-    testCompile("org.junit.platform:junit-platform-launcher:1.0.0-M4")
-    testRuntime("org.junit.jupiter:junit-jupiter-engine:5.0.0-M4")
+    testCompile("org.junit.jupiter:junit-jupiter-api:${junitJupiterVersion}")
+    testCompile("org.junit.platform:junit-platform-launcher:${junitPlatformLauncherVersion}")
+    testRuntime("org.junit.jupiter:junit-jupiter-engine:${junitJupiterVersion}")
 }
 
 subprojects {
 
     group 'net.e6tech'
-    version '2.1.17'
+    version "${elementsVersion}"
 
     apply plugin: 'groovy'
     apply plugin: 'java'
@@ -40,9 +94,14 @@ subprojects {
         classpath = configurations.compile
     }
 
+    apply plugin: 'org.owasp.dependencycheck'
+    dependencyCheck {
+        suppressionFile = 'owasp.xml'
+    }
+
     task sourcesJar(type: Jar) {
-        baseName "elements-${project.name}"
-        classifier 'sources'
+        archiveBaseName.set "elements-${project.name}"
+        archiveClassifier.set 'sources'
         from sourceSets.main.allSource
     }
 

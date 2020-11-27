@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,13 +17,12 @@
 package net.e6tech.elements.common.resources;
 
 import net.e6tech.elements.common.logging.Logger;
+import org.junit.jupiter.api.Test;
 import org.yaml.snakeyaml.Yaml;
 
 import java.util.Map;
 import java.util.Properties;
 
-import org.junit.jupiter.api.Test;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -174,6 +173,7 @@ public class ConfigurationTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
     public void simpleYaml() {
         Yaml yaml = new Yaml();
         Iterable<Object> iter = yaml.loadAll(test1);

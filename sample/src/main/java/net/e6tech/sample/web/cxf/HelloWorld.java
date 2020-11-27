@@ -18,26 +18,42 @@ package net.e6tech.sample.web.cxf;
 
 import net.e6tech.elements.common.inject.Inject;
 import net.e6tech.elements.common.resources.InstanceNotFoundException;
-import net.e6tech.elements.common.resources.ResourceManager;
+import net.e6tech.elements.common.resources.Provision;
 import net.e6tech.elements.common.resources.Resources;
 import net.e6tech.elements.persist.EntityManagerConfig;
 
 import javax.annotation.Nonnull;
 import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
+import javax.annotation.security.DenyAll;
+import javax.annotation.security.PermitAll;
 import javax.persistence.EntityManager;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 @Path("/helloworld")
 @SuppressWarnings("all") // it is a test case
-public class HelloWorld{
+public class HelloWorld {
 
     @Inject
-    ResourceManager resourceManager;
+    Provision provision;
 
     @Inject
     Resources resources;
+
+    private String extraMessage;
+
+    public String getExtraMessage() {
+        return extraMessage;
+    }
+
+    public void setExtraMessage(String extraMessage) {
+        this.extraMessage = extraMessage;
+    }
 
     @PostConstruct
     public void postConstruct() {
@@ -64,9 +80,50 @@ public class HelloWorld{
 
     @GET
     @Produces({MediaType.APPLICATION_JSON})
+    @Path("hello/echo")
+    @EntityManagerConfig(disable = true)
+    public String echo(@QueryParam("param") String echo) {
+        return echo;
+    }
+
+    @POST
+    @Produces({MediaType.APPLICATION_JSON})
+    @Path("hello/withParam")
+    @EntityManagerConfig(disable = true)
+    public String withParam(@QueryParam("param") String param, String post) {
+        String str = "hello " + param;
+        if (extraMessage != null)
+            str += " " + extraMessage;
+        return str;
+    }
+
+    @PermitAll
+    @GET
+    @Produces({MediaType.APPLICATION_JSON})
     @Path("hello/{greeting}")
     public String sayHello(@PathParam("greeting") String greeting) {
-        return "hello " + greeting;
+        return provision.open()
+                .annotate(EntityManagerConfig.class, EntityManagerConfig::names, new String[] {"sample-rw"})
+                .apply(EntityManager.class, Resources.class,  (em, res) -> {
+                    EntityManager byName = res.getMapVariable(EntityManager.class).get("sample-rw");
+                    assert em == byName;
+
+                    String str = "hello " + greeting;
+                    if (extraMessage != null)
+                        str += " " + extraMessage;
+                    return str;
+                });
+    }
+
+    @DenyAll
+    @GET
+    @Produces({MediaType.APPLICATION_JSON})
+    @Path("hello/security/{greeting}")
+    public String withSecurity(@PathParam("greeting") String greeting) {
+        String str = "hello " + greeting;
+        if (extraMessage != null)
+            str += " " + extraMessage;
+        return str;
     }
 
     @GET
@@ -79,7 +136,7 @@ public class HelloWorld{
     @POST
     @Produces({MediaType.APPLICATION_JSON})
     @Path("hello")
-    public HelloData post(@Nonnull HelloData data) {
+    public HelloData post(HelloData data) {
         if (data == null) throw new NullPointerException();
         return data;
     }
@@ -89,6 +146,44 @@ public class HelloWorld{
     @Path("hello/badPost")
     public HelloData badPost(HelloData data) {
         throw new NullPointerException("test");
+    }
+
+    @DELETE
+    @Produces({MediaType.APPLICATION_JSON})
+    @Path("hello/delete/{path}")
+    public void delete(@PathParam("path") String path, HelloData data) {
+        System.out.println("Got DELET with path " + path);
+    }
+
+    @DELETE
+    @Produces({MediaType.APPLICATION_JSON})
+    @Path("hello/delete2/{path}")
+    public void delete2(@PathParam("path") String path) {
+        System.out.println("Got DELETE with path " + path);
+    }
+
+    @GET
+    @Produces({MediaType.APPLICATION_JSON})
+    @Path("hello/list")
+    @EntityManagerConfig(disable = true)
+    public List<HelloData> list() {
+        List<HelloData> list = new ArrayList<>();
+        HelloData data = new HelloData();
+        data.setData("hello");
+        list.add(data);
+        return list;
+    }
+
+    @GET
+    @Produces({MediaType.APPLICATION_JSON})
+    @Path("hello/map")
+    @EntityManagerConfig(disable = true)
+    public Map<String, HelloData> map() {
+        Map<String, HelloData> map = new HashMap<>();
+        HelloData data = new HelloData();
+        data.setData("hello");
+        map.put("1", data);
+        return map;
     }
 
 }

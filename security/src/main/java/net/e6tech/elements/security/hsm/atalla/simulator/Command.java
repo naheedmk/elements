@@ -39,8 +39,13 @@ public abstract class Command extends Message {
         commands.put("37", ChangePIN.class);
         commands.put("32", VerifyPIN.class);
         commands.put("31", TranslatePIN.class);
+        commands.put("3A", VerifyCardAndPIN.class);
+        commands.put("7E", CheckDigits.class);
         commands.put("11B", ImportWorkingKey.class);
         commands.put("335", TranslatePINBlock.class);
+        commands.put("350", VerifyARQC.class);
+        commands.put("351", EMVPINChange.class);
+        commands.put("352", EMVGenerateMAC.class);
     }
 
     protected AtallaSimulator simulator;
@@ -55,7 +60,7 @@ public abstract class Command extends Message {
     public static Command createInstance(String message, AtallaSimulator simulator) {
         try {
             Message msg = new Message(message);
-            Command request = commands.get(msg.getField(0)).newInstance();
+            Command request = commands.get(msg.getField(0)).getDeclaredConstructor().newInstance();
             request.simulator = simulator;
             request.fields = msg.getFields();
             return request;
@@ -75,6 +80,8 @@ public abstract class Command extends Message {
         } catch (CommandException e) {
             Logger.suppress(e);
             return new Message("<00#" + e.error() + ">");
+        } catch (Exception e) {
+            return new Message("<00#0800" + CommandException.REVISION + "#>");
         }
     }
 

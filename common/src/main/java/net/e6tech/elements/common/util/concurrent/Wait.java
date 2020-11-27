@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package net.e6tech.elements.common.util.concurrent;
 import java.util.Hashtable;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -27,9 +28,10 @@ import java.util.concurrent.TimeUnit;
  */
 @SuppressWarnings({"squid:S2276","squid:S134", "squid:S1188", "squid:S1066", "squid:S2864", "squid:S1149"})
 public class Wait<K, V> {
-    Hashtable<K, Entry<V>> table = new Hashtable<>();
+    Map<K, Entry<V>> table = new Hashtable<>();
     Thread thread;
 
+    @SuppressWarnings("squid:S899")
     public void offer(K key, V value) {
         Entry<V> entry = table.get(key);
         if (entry != null) {
@@ -48,6 +50,7 @@ public class Wait<K, V> {
         }
     }
 
+    @SuppressWarnings("squid:S3776")
     public void newEntry(K key, Object userData, long expired) {
         Entry<V> entry = new Entry<>();
         entry.userData = userData;
@@ -142,6 +145,7 @@ public class Wait<K, V> {
         return entry.queue.peek();
     }
 
+    @SuppressWarnings("unchecked")
     public <T> T peekUserData(K key) {
         Entry<V> entry = table.get(key);
         if (entry == null)

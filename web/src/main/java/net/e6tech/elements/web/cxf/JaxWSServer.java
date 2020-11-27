@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,13 +15,14 @@ limitations under the License.
 */
 package net.e6tech.elements.web.cxf;
 
-import net.e6tech.elements.common.resources.Resources;
 import net.e6tech.elements.common.reflection.Reflection;
+import net.e6tech.elements.common.resources.Resources;
 import net.e6tech.elements.common.util.SystemException;
-import org.apache.cxf.interceptor.LoggingInInterceptor;
-import org.apache.cxf.interceptor.LoggingOutInterceptor;
+import org.apache.cxf.ext.logging.LoggingInInterceptor;
+import org.apache.cxf.ext.logging.LoggingOutInterceptor;
 import org.apache.cxf.jaxws.JaxWsServerFactoryBean;
 
+import java.net.URISyntaxException;
 import java.net.URL;
 
 
@@ -44,14 +45,11 @@ public class JaxWSServer extends CXFServer {
             svrFactory.setServiceBean(implementor);
             svrFactory.getInInterceptors().add(new LoggingInInterceptor());
             svrFactory.getOutInterceptors().add(new LoggingOutInterceptor());
-            svrFactory.setStart(false);
-            registerServer(svrFactory.create());
-        }
-
-        try {
-            initKeyStore();
-        } catch (Exception th) {
-            throw new SystemException(th);
+            try {
+                addController(new ServerController<>(url, svrFactory));
+            } catch (URISyntaxException e) {
+                throw new SystemException(e);
+            }
         }
 
         super.initialize(resources);

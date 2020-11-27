@@ -22,43 +22,15 @@ atom("cluster") {
     configuration = """
         genesis:
             name: ${clusterName}
-            initialCapacity: 5
+            workPoolConfig:
+                initialCapacity: 10
            
 """
     genesis = Genesis
     genesis.configuration = """
-akka {
-  actor {
-    provider = "cluster"
-  }
-  remote {
-    log-remote-lifecycle-events = off
-    netty.tcp {
-      hostname = "${clusterHost}"
-      port = ${clusterPort}
-    }
-  }
-
-  cluster {
-    seed-nodes = ${clusterSeeds}
-
-    # auto downing is NOT safe for production deployments.
-    # you may want to use it during development, read more about it in the docs.
-    #
-    # auto-down-unreachable-after = 10s
-  }
-}
-
-# Disable legacy metrics in akka-cluster.
-akka.cluster.metrics.enabled=off
-
-# Enable metrics extension in akka-cluster-metrics.
-# akka.extensions=["akka.cluster.metrics.ClusterMetricsExtension"]
-
-# Sigar native library extract location during tests.
-# Note: use per-jvm-instance folder when running multiple jvm on one host.
-# akka.cluster.metrics.native-library-extract-folder=${home}/target/native
-
+akka.cluster.seed-nodes = ${clusterSeeds}
+akka.remote.artery.canonical.port = ${clusterPort}
+akka.remote.artery.canonical.hostname = ${clusterHost}
 """
     myCluster = ClusterNode
     postInit {

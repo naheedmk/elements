@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 public class DataSetTest {
 
+    @SuppressWarnings("unchecked")
     @Test
     public void test() throws Exception {
         DataSet dataSet = new DataSet(new String[] {"number"}, new Class[] {Integer.class});

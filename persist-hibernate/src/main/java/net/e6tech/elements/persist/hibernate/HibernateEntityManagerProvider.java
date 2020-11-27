@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,11 +18,11 @@ limitations under the License.
 package net.e6tech.elements.persist.hibernate;
 
 import net.e6tech.elements.common.logging.Logger;
+import net.e6tech.elements.common.resources.InstanceNotFoundException;
 import net.e6tech.elements.common.resources.Resources;
 import net.e6tech.elements.common.serialization.ObjectReference;
 import net.e6tech.elements.common.util.InitialContextFactory;
 import net.e6tech.elements.persist.*;
-import org.hibernate.engine.spi.SessionFactoryImplementor;
 import org.hibernate.id.IdentifierGenerator;
 import org.hibernate.internal.SessionImpl;
 import org.hibernate.jpa.AvailableSettings;
@@ -44,6 +44,9 @@ public class HibernateEntityManagerProvider extends EntityManagerProvider {
 
     private Map<String, IdentifierGenerator> identifierGenerators = new LinkedHashMap<>();
 
+    private net.e6tech.elements.common.interceptor.Interceptor interceptor = new net.e6tech.elements.common.interceptor.Interceptor();
+
+    @SuppressWarnings("unchecked")
     @Override
     public void initialize(Resources resources) {
         if (System.getProperty(Context.INITIAL_CONTEXT_FACTORY) == null) {
@@ -57,7 +60,7 @@ public class HibernateEntityManagerProvider extends EntityManagerProvider {
         if (identifierGenerators.size() > 0) {
             Map<String, Class<?>> strategies = new LinkedHashMap<>();
             for (Map.Entry<String, IdentifierGenerator> entry: identifierGenerators.entrySet()) {
-                Class<IdentifierGenerator> cls = net.e6tech.elements.common.interceptor.Interceptor
+                Class<IdentifierGenerator> cls = interceptor
                         .newPrototypeClass((Class<IdentifierGenerator>)entry.getValue().getClass(), entry.getValue());
                 strategies.put(entry.getKey(), cls);
             }
@@ -68,30 +71,23 @@ public class HibernateEntityManagerProvider extends EntityManagerProvider {
         super.initialize(resources);
     }
 
-    public IdentifierGeneratorRegistry register(String strategy, IdentifierGenerator generator) {
+    public HibernateEntityManagerProvider register(String strategy, IdentifierGenerator generator) {
         identifierGenerators.put(strategy, generator);
-        return new IdentifierGeneratorRegistry();
-    }
-
-    public class IdentifierGeneratorRegistry {
-        public IdentifierGeneratorRegistry register(String strategy, IdentifierGenerator generator) {
-            identifierGenerators.put(strategy, generator);
-            return this;
-        }
+        return this;
     }
 
     @Override
     protected void evictCollectionRegion(EvictCollectionRegion notification) {
         Cache cache = emf.getCache();
         org.hibernate.Cache hibernateCache = cache.unwrap(org.hibernate.Cache.class);
-        hibernateCache.evictCollectionRegion(notification.getRole());
+        hibernateCache.evictCollectionData(notification.getRole());
     }
 
     @Override
     protected void evictEntityRegion(EvictEntityRegion notification) {
         Cache cache = emf.getCache();
         org.hibernate.Cache hibernateCache = cache.unwrap(org.hibernate.Cache.class);
-        hibernateCache.evictEntityRegion(notification.getEntityName());
+        hibernateCache.evictEntityData(notification.getEntityName());
     }
 
     @Override
@@ -100,36 +96,54 @@ public class HibernateEntityManagerProvider extends EntityManagerProvider {
         org.hibernate.Cache hibernateCache = cache.unwrap(org.hibernate.Cache.class);
         try {
             ObjectReference ref = notification.getObjectReference();
-            hibernateCache.evictEntity(getClass().getClassLoader().loadClass(ref.getType()), (Serializable) ref.getId());
+            hibernateCache.evictEntityData(getClass().getClassLoader().loadClass(ref.getType()), (Serializable) ref.getId());
         } catch (ClassNotFoundException e) {
             logger.warn(e.getMessage(), e);
         }
     }
 
     @Override
-    public void onOpen(Resources resources) {
-        super.onOpen(resources);
-        EntityManager em = resources.getInstance(EntityManager.class);
+    protected void onOpen(Resources resources, String alias, EntityManagerConfig config) {
+        super.onOpen(resources, alias, config);
+        EntityManager em = resources.getMapVariable(EntityManager.class).get(alias);
         SessionImpl session = (SessionImpl) em.getDelegate();
-        SessionFactoryImplementor  factory = session.getSessionFactory();
-        resources.bind(SessionImpl.class, session);
-        resources.bind(SessionFactoryImplementor.class, factory);
+        resources.getMapVariable(SessionImpl.class).put(alias, session);
+
+        // cannot call resources.inject(interceptor), resources is not fully open yet
         if (session.getInterceptor() instanceof PersistenceInterceptor) {
-            PersistenceInterceptor interceptor = (PersistenceInterceptor) session.getInterceptor();
-            // cannot call resources.inject(interceptor), it is not open yet
-            interceptor.setResources(resources);
+            PersistenceInterceptor i = (PersistenceInterceptor) session.getInterceptor();
+            i.setResources(resources);
+            if (i instanceof Interceptor) {
+               ((Interceptor) i).setSessionFactory(session.getSessionFactory());
+            }
         }
     }
 
     @Override
-    public void cleanup(Resources resources) {
-        super.cleanup(resources);
-        EntityManager em = resources.getInstance(EntityManager.class);
-        SessionImpl session = (SessionImpl) em.getDelegate();
-        if (session.getInterceptor() instanceof PersistenceInterceptor) {
-            PersistenceInterceptor interceptor = (PersistenceInterceptor) session.getInterceptor();
-            interceptor.cleanup(resources);
+    protected void cleanup(Resources resources, String alias) {
+        super.cleanup(resources, alias);
+        try {
+            SessionImpl session = getSessionImpl(resources, alias);
+            if (session.getInterceptor() instanceof PersistenceInterceptor) {
+                PersistenceInterceptor i = (PersistenceInterceptor) session.getInterceptor();
+                i.cleanup(resources);
+            }
+        } catch (InstanceNotFoundException ex) {
+            // don't care
         }
     }
 
+    @Override
+    public void cancelQuery(Resources resources, String alias) {
+        super.cancelQuery(resources, alias);
+        try {
+            getSessionImpl(resources, alias).cancelQuery();
+        } catch (Exception ex) {
+            // don't care
+        }
+    }
+
+    private SessionImpl getSessionImpl(Resources resources, String alias) {
+        return resources.getMapVariable(SessionImpl.class).get(alias);
+    }
 }

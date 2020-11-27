@@ -16,15 +16,18 @@
 
 package net.e6tech.elements.common.notification;
 
+import net.e6tech.elements.common.Tags;
 import org.junit.jupiter.api.Test;
 
 
 /**
  * Created by futeh.
  */
+@Tags.Common
 public class NotificationListenerTest {
 
     @Test
+    @SuppressWarnings("unchecked")
     public void notificationClass() throws Exception {
         Class<? extends Notification>[] types = (new TestNotificationListener()).getNotificationTypes();
         for (Class cls : types) System.out.println(cls);

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,51 +20,63 @@ import net.e6tech.elements.common.subscribe.Broadcast;
 import net.e6tech.elements.common.subscribe.Subscriber;
 
 import java.io.Serializable;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * Created by futeh on 1/21/16.
  */
-@SuppressWarnings({"squid:S1149"})
+@SuppressWarnings({"unchecked", "squid:S1149"})
 public class NotificationCenter implements Broadcast {
 
-    private Map<Object, List<NotificationListener>> srcNotificationListeners = new Hashtable<>();
-    private Map<Class, List<NotificationListener>> notificationListeners = new Hashtable<>();
+    private Map<Object, List<NotificationListener>> srcNotificationListeners = new ConcurrentHashMap<>();
+    private Map<Class, List<NotificationListener>> notificationListeners = new ConcurrentHashMap<>();
 
     // for broadcasting
-    Map<Object, List<Subscriber>> subscribers = new Hashtable<>();
-    List<Broadcast> broadcasts = new Vector<>();
+    Map<Object, List<Subscriber>> subscribers = new ConcurrentHashMap<>();
+    List<Broadcast> broadcasts = new CopyOnWriteArrayList<>();
 
     public void addSourceNotificationListener(Object src, NotificationListener listener) {
-        List<NotificationListener> listeners = srcNotificationListeners.computeIfAbsent(src, n -> new Vector<>());
+        List<NotificationListener> listeners = srcNotificationListeners.computeIfAbsent(src, n -> new CopyOnWriteArrayList<>());
         listeners.add(listener);
     }
 
     public void removeSourceNotificationListener(Object src, NotificationListener listener) {
-        List<NotificationListener> listeners = srcNotificationListeners.computeIfAbsent(src, n -> new Vector<>());
+        List<NotificationListener> listeners = srcNotificationListeners.computeIfAbsent(src, n -> new CopyOnWriteArrayList<>());
         listeners.remove(listener);
     }
 
     public <T extends Notification> void addNotificationListener(Class<T> cls, NotificationListener<T> listener) {
-        List<NotificationListener> listeners = notificationListeners.computeIfAbsent(cls, n -> new Vector<>());
+        List<NotificationListener> listeners = notificationListeners.computeIfAbsent(cls, n -> new CopyOnWriteArrayList<>());
         listeners.add(listener);
     }
 
     public <T extends Notification> void removeNotificationListener(Class<T> cls, NotificationListener<T> listener) {
-        List<NotificationListener> listeners = notificationListeners.computeIfAbsent(cls, n -> new Vector<>());
+        List<NotificationListener> listeners = notificationListeners.computeIfAbsent(cls, n -> new CopyOnWriteArrayList<>());
         listeners.remove(listener);
     }
 
     public void fireNotification(Notification notification) {
         if (notification.source() != null) {
             List<NotificationListener> listeners = srcNotificationListeners.get(notification.source());
-            if (listeners != null)
+            if (listeners != null) {
                 listeners.forEach(listener -> listener.onEvent(notification));
+            }
         }
 
-        List<NotificationListener> listeners = notificationListeners.get(notification.getClass());
-        if (listeners != null)
-            listeners.forEach(listener -> listener.onEvent(notification));
+        Class cls = notification.getClass();
+        while (!cls.equals(Object.class)) {
+            List<NotificationListener> listeners = notificationListeners.get(cls);
+            if (listeners != null) {
+                listeners.forEach(listener -> listener.onEvent(notification));
+                break;
+            }
+            cls = cls.getSuperclass();
+        }
     }
 
     public List<NotificationListener> getNotificationListeners(Notification notification) {
@@ -78,7 +90,7 @@ public class NotificationCenter implements Broadcast {
         if (list != null)
             listeners.addAll(list);
 
-        return list;
+        return list == null ? Collections.emptyList() : list;
     }
 
     // ***************************************************************************************
@@ -86,7 +98,7 @@ public class NotificationCenter implements Broadcast {
     // ***************************************************************************************
     @Override
     public void subscribe(String topic, Subscriber subscriber) {
-        List<Subscriber> list = subscribers.computeIfAbsent(topic, key -> new LinkedList<Subscriber>());
+        List<Subscriber> list = subscribers.computeIfAbsent(topic, key -> new CopyOnWriteArrayList<>());
         synchronized (list) {
             list.add(subscriber);
         }
@@ -102,10 +114,11 @@ public class NotificationCenter implements Broadcast {
 
     @Override
     public void unsubscribe(String topic, Subscriber subscriber) {
-        List<Subscriber> list = subscribers.computeIfAbsent(topic, key -> new LinkedList<Subscriber>());
+        List<Subscriber> list = subscribers.computeIfAbsent(topic, key -> new CopyOnWriteArrayList<>());
         synchronized (list) {
             list.remove(subscriber);
         }
+
         for (Broadcast broadcast: broadcasts) {
             broadcast.unsubscribe(topic, subscriber);
         }

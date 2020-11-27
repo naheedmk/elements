@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,12 +18,14 @@ package net.e6tech.elements.persist;
 import net.e6tech.elements.common.inject.Inject;
 import net.e6tech.elements.common.logging.Logger;
 import net.e6tech.elements.common.notification.NotificationCenter;
+import net.e6tech.elements.common.reflection.Annotator;
 import net.e6tech.elements.common.resources.*;
 import net.e6tech.elements.common.subscribe.Broadcast;
 
 import javax.persistence.EntityManager;
 import javax.persistence.EntityManagerFactory;
 import javax.persistence.Persistence;
+import javax.persistence.Query;
 import javax.persistence.metamodel.Metamodel;
 import java.lang.reflect.Proxy;
 import java.util.*;
@@ -34,39 +36,56 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Created by futeh.
  */
 public abstract class EntityManagerProvider implements ResourceProvider, Initializable {
-
-    private static final Logger logger = Logger.getLogger();
-
-    @Inject(optional = true)
+    private static final String DEFAULT_NAME = "default";
+    private static final String[] DEFAULT_PROVIDER_NAMES = new String[] {DEFAULT_NAME};
+    private static Logger logger = Logger.getLogger();
     private ExecutorService threadPool;
-
-    @Inject(optional = true)
-    private NotificationCenter center;
-
+    private NotificationCenter notificationCenter;
     protected EntityManagerFactory emf;
     private String persistenceUnitName;
     private Map persistenceProperties;
     private Broadcast broadcast;
-
     private long transactionTimeout = 0;
     private boolean monitorTransaction = true;
     private long longTransaction = 200L;  // queries that exceeds this value is considered a long transaction.
     private boolean firstQuery = true;
     private AtomicInteger ignoreInitialLongTransactions = new AtomicInteger(1);
     private BlockingQueue<EntityManagerMonitor> monitorQueue = new LinkedBlockingQueue<>();
-    private List<EntityManagerMonitor> entityManagerMonitors = new ArrayList<>();
-    private long monitorIdle = 60000;
-    private boolean monitoring = false;
+    private final List<EntityManagerMonitor> entityManagerMonitors = new ArrayList<>();
+    private volatile boolean shutdown = false;
+    private String providerName = DEFAULT_NAME;
+    private ResourceManager resourceManager;
+    private InvocationListener<EntityManager> entityManagerListener;
+    private InvocationListener<Query> queryListener;
 
     public EntityManagerProvider() {
     }
 
-    public long getMonitorIdle() {
-        return monitorIdle;
+    public ExecutorService getThreadPool() {
+        return threadPool;
     }
 
-    public void setMonitorIdle(long monitorIdle) {
-        this.monitorIdle = monitorIdle;
+    @Inject(optional = true)
+    public void setThreadPool(ExecutorService threadPool) {
+        this.threadPool = threadPool;
+    }
+
+    public NotificationCenter getNotificationCenter() {
+        return notificationCenter;
+    }
+
+    @Inject(optional = true)
+    public void setNotificationCenter(NotificationCenter center) {
+        this.notificationCenter = center;
+    }
+
+    public ResourceManager getResourceManager() {
+        return resourceManager;
+    }
+
+    @Inject
+    public void setResourceManager(ResourceManager resourceManager) {
+        this.resourceManager = resourceManager;
     }
 
     public Broadcast getBroadcast() {
@@ -127,6 +146,34 @@ public abstract class EntityManagerProvider implements ResourceProvider, Initial
         this.ignoreInitialLongTransactions = new AtomicInteger(n);
     }
 
+    public List<EntityManagerMonitor> getEntityManagerMonitors() {
+        return entityManagerMonitors;
+    }
+
+    public String getProviderName() {
+        return providerName;
+    }
+
+    public void setProviderName(String providerName) {
+        this.providerName = providerName;
+    }
+
+    public InvocationListener<EntityManager> getEntityManagerListener() {
+        return entityManagerListener;
+    }
+
+    public void setEntityManagerListener(InvocationListener<EntityManager> entityManagerListener) {
+        this.entityManagerListener = entityManagerListener;
+    }
+
+    public InvocationListener<Query> getQueryListener() {
+        return queryListener;
+    }
+
+    public void setQueryListener(InvocationListener<Query> queryListener) {
+        this.queryListener = queryListener;
+    }
+
     protected void evictCollectionRegion(EvictCollectionRegion notification) {
     }
 
@@ -137,6 +184,8 @@ public abstract class EntityManagerProvider implements ResourceProvider, Initial
     }
 
     public void initialize(Resources resources) {
+        startMonitoring();
+
         emf = Persistence.createEntityManagerFactory(persistenceUnitName, persistenceProperties);
 
         EntityManager em = null;
@@ -152,31 +201,70 @@ public abstract class EntityManagerProvider implements ResourceProvider, Initial
                 em.close();
         }
 
-        NotificationCenter notificationCenter = resources.getNotificationCenter();
-        notificationCenter.subscribe(EvictCollectionRegion.class,
-                notice -> evictCollectionRegion((EvictCollectionRegion) notice.getUserObject()));
+        NotificationCenter center = resources.getNotificationCenter();
+        center.subscribe(EvictCollectionRegion.class,
+                notice -> evictCollectionRegion(notice.getUserObject()));
 
-        notificationCenter.subscribe(EvictEntityRegion.class,
-                notice -> evictEntityRegion((EvictEntityRegion) notice.getUserObject()));
+        center.subscribe(EvictEntityRegion.class,
+                notice -> evictEntityRegion(notice.getUserObject()));
 
-        notificationCenter.subscribe(EvictEntity.class,
+        center.subscribe(EvictEntity.class,
                 notice -> evictEntity(notice.getUserObject()));
     }
 
-    @Override
-    public void onOpen(Resources resources) {
+    private String[] providerNames(Resources resources) {
+        Optional<EntityManagerConfig> config = resources.configurator().annotation(EntityManagerConfig.class);
+        String[] names = config.map(EntityManagerConfig::names).orElse(DEFAULT_PROVIDER_NAMES);
+        if (names.length == 0)
+            names = DEFAULT_PROVIDER_NAMES;
+        return names;
+    }
+
+    private void shouldOpen(Resources resources, String alias) {
         Optional<EntityManagerConfig> config = resources.configurator().annotation(EntityManagerConfig.class);
         if (config.isPresent() && config.get().disable())
             throw new NotAvailableException();
 
+        String[] names = providerNames(resources);
+
+        // caller did not provide a list of named provider so that we would let every configured EntityManagerProvider through.
+        if (names.length == 0)
+            return;
+
+        boolean found = false;
+        for (String n : names) {
+            if (n.equals(alias)) {
+                found = true;
+                break;
+            }
+        }
+
+        Map<String, EntityManager> map = resources.getMapVariable(EntityManager.class);
+        if (map.get(alias) != null) {
+            throw new IllegalStateException("There is already an EntityManagerProvider named " + alias + " configured!");
+        }
+
+        if (!found)
+            throw new NotAvailableException();
+    }
+
+    protected EntityManagerConfig configuration(Resources resources, String alias) {
+
+        Optional<EntityManagerConfig> config = resources.configurator().annotation(EntityManagerConfig.class);
+
+        // timeout
         long timeout = config.map(EntityManagerConfig::timeout).orElse(transactionTimeout);
         if (timeout == 0L)
             timeout = transactionTimeout;
+
+        // timout extension
         long timeoutExt = config.map(EntityManagerConfig::timeoutExtension).orElse(0L);
         timeout += timeoutExt;
 
+        // should monitor
         boolean monitor = config.map(EntityManagerConfig::monitor).orElse(monitorTransaction);
 
+        // longQuery time
         long longQuery = config.map(EntityManagerConfig::longTransaction).orElse(longTransaction);
         if (longQuery == 0L)
             longQuery = longTransaction;
@@ -187,70 +275,108 @@ public abstract class EntityManagerProvider implements ResourceProvider, Initial
                 longQuery = 1000L;
         }
 
-        EntityManager em = emf.createEntityManager();
-        if (monitor) {
-            monitor(new EntityManagerMonitor(em, System.currentTimeMillis() + timeout, new Throwable()));
+        long longQueryFinal = longQuery;
+        long timeoutFinal = timeout;
+        String[] names = providerNames(resources);
+        EntityManagerConfig result = Annotator.create(EntityManagerConfig.class,
+                (v, a) ->
+            v.set(a::names, names)
+                    .set(a::disable, config.map(EntityManagerConfig::disable).orElse(false))
+                    .set(a::timeout, timeoutFinal)
+                    .set(a::longTransaction, longQueryFinal)
+                    .set(a::monitor, monitor)
+                    .set(a::timeoutExtension, timeoutExt)
+        );
+
+        resources.getMapVariable(EntityManagerConfig.class)
+                .put(alias, result);
+        return result;
+    }
+
+    @Override
+    public final void onOpen(Resources resources) {
+        shouldOpen(resources, getProviderName());
+        EntityManagerConfig config = configuration(resources, getProviderName());
+        onOpen(resources, getProviderName(), config);
+    }
+
+    protected void onOpen(Resources resources, String alias, EntityManagerConfig config) {
+        EntityManager em = resources.getInstance(EntityManagerBuilder.class, () -> (r, a, f) -> f.createEntityManager())
+                .build(resources, alias, emf);
+
+        if (config.monitor()) {
+            EntityManagerMonitor entityManagerMonitor = new EntityManagerMonitor(alias, threadPool, this,
+                    resources,
+                    em, System.currentTimeMillis() + config.timeout(), new Throwable());
+            monitor(entityManagerMonitor);
+            resources.getMapVariable(EntityManagerMonitor.class)
+                    .put(alias, entityManagerMonitor);
         }
 
-        EntityManagerInvocationHandler emHandler = new EntityManagerInvocationHandler(resources, em);
-        emHandler.setLongTransaction(longQuery);
+        EntityManagerInvocationHandler emHandler = new EntityManagerInvocationHandler(resources,
+                em, alias, this, config,
+                getEntityManagerListener(), getQueryListener());
+        emHandler.setLongTransaction(config.longTransaction());
         emHandler.setIgnoreInitialLongTransactions(ignoreInitialLongTransactions);
-        resources.bind(EntityManager.class, (EntityManager) Proxy.newProxyInstance(getClass().getClassLoader(),
-                new Class[]{EntityManager.class}, emHandler));
+
+        EntityManager proxy = (EntityManager) Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class[]{EntityManager.class, EntityManagerInfo.class}, emHandler);
+
+        // first come first win unless it is the DEFAULT
+        if (!resources.hasInstance(EntityManager.class)) {
+            resources.bind(EntityManager.class, proxy);
+        } else if (alias.equals(DEFAULT_NAME)) {
+            resources.rebind(EntityManager.class, proxy);
+        }
+
+        resources.getMapVariable(EntityManager.class)
+                .put(alias, proxy);
+
+        resources.getMapVariable(EntityManagerProvider.class)
+                .put(alias, this);
+
         em.getTransaction().begin();
     }
 
     // Submits a thread task to monitor expired EntityManagers.
     // the thread would break out after monitorIdle time.
     // when another monitor shows up, the thread task would resume.
-    @SuppressWarnings({"squid:S1188", "squid:S134"})
+    @SuppressWarnings({"squid:S1188", "squid:S134", "squid:S3776", "squid:S899"})
     private void monitor(EntityManagerMonitor monitor) {
-
         // entityManagerMonitors contains open, committed and aborted entityManagers.
-        synchronized (monitorQueue) {
+        if (!shutdown)
             monitorQueue.offer(monitor);
-            if (monitoring) {
-                return;
-            } else {
-                monitoring = true;
-            }
-        }
+    }
 
+    @SuppressWarnings({"squid:S3776", "squid:S1181", "squid:S1141"})
+    protected void startMonitoring() {
         // starting a thread to monitor
         if (threadPool == null) {
-            ThreadGroup group = Thread.currentThread().getThreadGroup();
             threadPool = Executors.newCachedThreadPool(runnable -> {
-                Thread thread = new Thread(group, runnable, "EntityManagerProvider");
+                Thread thread = new Thread(runnable, "EntityManagerProvider");
                 thread.setName("EntityManagerProvider-" + thread.getId());
                 thread.setDaemon(true);
                 return thread;
             });
         }
 
-        threadPool.execute(()->{
-            try {
-                while (true) {
-                    synchronized (monitorQueue) {
-                        monitoring = true;
-                    }
-
-                    long start = System.currentTimeMillis();
+        threadPool.execute(()-> {
+            while (!shutdown) {
+                try {
                     long expiration = 0;
-
-                    synchronized (entityManagerMonitors) {
-                        monitorQueue.drainTo(entityManagerMonitors);
-                        Iterator<EntityManagerMonitor> iterator = entityManagerMonitors.iterator();
-                        while (iterator.hasNext()) {
-                            EntityManagerMonitor m = iterator.next();
-                            if (!m.entityManager.isOpen()) { // already closed
-                                iterator.remove();
-                            } else if (m.expiration < System.currentTimeMillis()) {
-                                m.rollback();  // rollback
-                                iterator.remove();
-                            } else {
-                                // for find out the shortest sleep time
-                                if (expiration == 0 || m.expiration < expiration) expiration = m.expiration;
-                            }
+                    monitorQueue.drainTo(entityManagerMonitors);
+                    Iterator<EntityManagerMonitor> iterator = entityManagerMonitors.iterator();
+                    while (iterator.hasNext()) {
+                        EntityManagerMonitor m = iterator.next();
+                        if (!m.getEntityManager().isOpen()) { // already closed
+                            iterator.remove();
+                        } else if (m.getExpiration() < System.currentTimeMillis()) {
+                            iterator.remove();
+                            m.rollback();  // rollback
+                        } else {
+                            // for find out the shortest sleep time
+                            if (expiration == 0 || m.getExpiration() < expiration)
+                                expiration = m.getExpiration();
                         }
                     }
 
@@ -259,15 +385,17 @@ public abstract class EntityManagerProvider implements ResourceProvider, Initial
                         sleep = expiration - System.currentTimeMillis();
                         if (sleep < 0) {
                             // probably due to debugging
-                            if (!entityManagerMonitors.isEmpty()) sleep = 1;
-                            else sleep = 0;
+                            if (!entityManagerMonitors.isEmpty())
+                                sleep = 1;
+                            else
+                                sleep = 0;
                         }
                     }
 
                     EntityManagerMonitor newMonitor = null;
                     try {
                         if (sleep == 0) {
-                            newMonitor = monitorQueue.poll(monitorIdle, TimeUnit.MILLISECONDS);
+                            newMonitor = monitorQueue.take();
                         } else {
                             // What if an EntityManager closed during the sleep?
                             newMonitor = monitorQueue.poll(sleep, TimeUnit.MILLISECONDS);
@@ -277,110 +405,110 @@ public abstract class EntityManagerProvider implements ResourceProvider, Initial
                     }
 
                     if (newMonitor != null) {
-                        synchronized (entityManagerMonitors) {
-                            entityManagerMonitors.add(newMonitor);
-                        }
-                    } else {
-                        // Some thread may just add a monitor at this point so that
-                        // we need to check the monitorQueue size before we break out.
-                        // Also, we need to make sure entityManagerMonitors is empty as well.
-                        synchronized (monitorQueue) {
-                            if (monitorQueue.isEmpty()
-                                    && entityManagerMonitors.isEmpty()
-                                    && System.currentTimeMillis() - start > monitorIdle) {
-                                monitoring = false;
-                                break;
-                            }
-                        }
+                        entityManagerMonitors.add(newMonitor);
                     }
-                }
-            } finally {
-                // in case of some exception, we make sure monitoring is set to false.
-                synchronized (monitorQueue) {
-                    monitoring = false;
+                } catch (Throwable ex) {
+                    logger.error("Unexpected exception in EntityManagerProvider during monitoring", ex);
                 }
             }
         });
     }
 
     @Override
-    public void onCommit(Resources resources) {
+    public final void afterOpen(Resources resources) {
+        afterOpen(resources, getProviderName());
+    }
+
+    protected void afterOpen(Resources resources, String alias) {
+    }
+
+    @Override
+    public final void onCommit(Resources resources) {
+        onCommit(resources, getProviderName());
+    }
+
+    protected void onCommit(Resources resources, String alias) {
         try {
-            EntityManager em = resources.getInstance(EntityManager.class);
+            EntityManager em = resources.getMapVariable(EntityManager.class).get(alias);
             em.getTransaction().commit();
             em.clear();
             em.close();
-            // to break out the
-            Optional<EntityManagerConfig> config = resources.configurator().annotation(EntityManagerConfig.class);
-            boolean monitor = config.map(EntityManagerConfig::monitor).orElse(monitorTransaction);
-            if (monitor) {
-                monitor(new EntityManagerMonitor(em, System.currentTimeMillis(), new Throwable()));
-            }
         } catch (InstanceNotFoundException ex) {
             Logger.suppress(ex);
         } finally {
-            cleanup(resources);
+            cleanup(resources, alias);
         }
     }
 
     @Override
-    public void afterCommit(Resources resources) {
+    public final void afterCommit(Resources resources) {
+        afterCommit(resources, getProviderName());
+    }
+
+    protected void afterCommit(Resources resources, String alias) {
     }
 
     @Override
-    public void onAbort(Resources resources) {
+    public final void onAbort(Resources resources) {
+        onAbort(resources, getProviderName());
+    }
+
+    protected void onAbort(Resources resources, String alias) {
         try {
-            EntityManager em = resources.getInstance(EntityManager.class);
+            EntityManager em = resources.getMapVariable(EntityManager.class).get(alias);
             em.getTransaction().rollback();
             em.clear();
             em.close();
-            Optional<EntityManagerConfig> config = resources.configurator().annotation(EntityManagerConfig.class);
-            boolean monitor = config.map(EntityManagerConfig::monitor).orElse(monitorTransaction);
-            if (monitor) {
-                monitor(new EntityManagerMonitor(em, System.currentTimeMillis(), new Throwable()));
-            }
         } catch (Exception th) {
             Logger.suppress(th);
         }  finally {
-            cleanup(resources);
+            cleanup(resources, alias);
         }
     }
 
-    protected void cleanup(Resources resources) {
-
+    protected void cleanup(Resources resources, String alias) {
     }
 
     @Override
-    public void onClosed(Resources resources) {
+    public final void afterAbort(Resources resources) {
+        afterAbort(resources, getProviderName());
+    }
 
+    protected void afterAbort(Resources resources, String alias) {
     }
 
     @Override
-    public void onShutdown() {
+    public final void onClosed(Resources resources) {
+        onClosed(resources, getProviderName());
+    }
+
+    protected void onClosed(Resources resources, String alias) {
+        EntityManagerMonitor m = resources.getMapVariable(EntityManagerMonitor.class).get(alias);
+        if (m != null)
+            m.close();
+    }
+
+    @Override
+    public final void onShutdown() {
+        onShutdown(getProviderName());
+    }
+
+    @SuppressWarnings("squid:S1172")
+    protected void onShutdown(String alias) {
         if (emf.isOpen()) {
             emf.close();
         }
+        shutdown = true;
     }
 
-    private static class EntityManagerMonitor {
-        EntityManager entityManager;
-        long expiration;
-        Throwable throwable;
-
-        EntityManagerMonitor(EntityManager entityManager, long expiration, Throwable throwable) {
-            this.entityManager = entityManager;
-            this.expiration = expiration;
-            this.throwable = throwable;
-        }
-
-        boolean rollback() {
-            if (entityManager.isOpen()) {
-                entityManager.getTransaction().setRollbackOnly();
-                entityManager.close();
-                logger.warn("EntityManagerProvider timeout", throwable);
-                return true;
-            }
-            return false;
-        }
+    public void cancelQuery(Resources resources, String alias) {
     }
+
+    @Override
+    public final String getDescription() {
+        return getDescription(getProviderName());
+    }
+
+    @SuppressWarnings("squid:S1172")
+    protected String getDescription(String alia) { return getClass().getName(); }
 }

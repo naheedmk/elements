@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,7 +15,6 @@ limitations under the License.
 */
 package net.e6tech.elements.common.logging;
 
-import net.e6tech.elements.common.util.Rethrowable;
 import net.e6tech.elements.common.reflection.Reflection;
 import org.apache.logging.log4j.ThreadContext;
 
@@ -38,9 +37,9 @@ import java.lang.reflect.Proxy;
  *
  */
 @SuppressWarnings({"squid:S2176", "squid:S00115", "squid:S1214"})
-public interface Logger extends org.slf4j.Logger, ExceptionLogger, Rethrowable {
+public interface Logger extends org.slf4j.Logger, LoggerExtension {
 
-    public static final String logDir = "elements.common.logging.logDir";
+    String logDir = "elements.common.logging.logDir";
 
     static void suppress(Throwable th) {
         // do nothing
@@ -73,5 +72,15 @@ public interface Logger extends org.slf4j.Logger, ExceptionLogger, Rethrowable {
     static Logger nullLogger() {
         return (Logger) Proxy.newProxyInstance(Logger.class.getClassLoader(), new Class[] {Logger.class},
                 new LogHandler(new NullLogger()));
+    }
+
+    static Logger consoleLogger() {
+        return (Logger) Proxy.newProxyInstance(Logger.class.getClassLoader(), new Class[] {Logger.class},
+                new LogHandler(new ConsoleLogger()));
+    }
+
+    static Logger from(org.slf4j.Logger logger) {
+        return (Logger) Proxy.newProxyInstance(Logger.class.getClassLoader(), new Class[] {Logger.class},
+                new LogHandler(logger));
     }
 }

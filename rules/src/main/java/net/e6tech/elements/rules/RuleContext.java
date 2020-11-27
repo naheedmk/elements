@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,11 +21,13 @@ import groovy.lang.MetaClass;
 import groovy.lang.MissingMethodException;
 import net.e6tech.elements.common.logging.Logger;
 import org.codehaus.groovy.runtime.InvokerHelper;
-import static net.e6tech.elements.rules.ControlFlow.*;
 
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+
+import static net.e6tech.elements.rules.ControlFlow.Continue;
+import static net.e6tech.elements.rules.ControlFlow.Failed;
 
 /**
  * Created by futeh.
@@ -76,6 +78,14 @@ public class RuleContext implements GroovyObject {
         this.completed = completed;
     }
 
+    public String getFailedMessage() {
+        return failedMessage;
+    }
+
+    public void setFailedMessage(String failedMessage) {
+        this.failedMessage = failedMessage;
+    }
+
     protected void onCheckFailed() {
         // to be subclassed.  this method is called whenever check fails.
     }
@@ -92,22 +102,28 @@ public class RuleContext implements GroovyObject {
     // rule threw an exception
     void ruleFailed(Rule rule, String failedMessage) {
         ruleFailed = rule;
-        if (failedMessage == null) {
-            this.failedMessage = RULE_FAILED_MSG + rule.getName() + ".";
-        } else {
-            this.failedMessage = RULE_FAILED_MSG + rule.getName() + " - " + failedMessage;
+        if (this.failedMessage == null) {
+            if (failedMessage == null) {
+                this.failedMessage = RULE_FAILED_MSG + rule.getName() + ".";
+            } else {
+                this.failedMessage = RULE_FAILED_MSG + rule.getName() + " - " + failedMessage;
+            }
         }
     }
 
     void ruleFailed(Rule rule, Throwable throwable) {
         exception = throwable;
         ruleFailed = rule;
-        if (failedMessage == null) {
-            this.failedMessage = RULE_FAILED_MSG + rule.getName() + ".";
-        } else {
-            this.failedMessage = RULE_FAILED_MSG + rule.getName() + " - " + throwable.getMessage();
+        if (this.failedMessage == null) {
+            if (throwable == null) {
+                this.failedMessage = RULE_FAILED_MSG + rule.getName() + ".";
+            } else {
+                this.failedMessage = RULE_FAILED_MSG + rule.getName() + " - " + throwable.getMessage();
+            }
         }
-        logger.debug(throwable.getMessage(), throwable);
+        if (throwable != null) {
+            logger.debug(throwable.getMessage(), throwable);
+        }
     }
 
     public Rule getRuleExecuted(String ruleName) {
@@ -120,10 +136,6 @@ public class RuleContext implements GroovyObject {
 
     public Rule getRuleFailed() {
         return ruleFailed;
-    }
-
-    public String getFailedMessage() {
-        return failedMessage;
     }
 
     public Throwable getException() {
@@ -175,6 +187,7 @@ public class RuleContext implements GroovyObject {
         return flow;
     }
 
+    @SuppressWarnings("squid:S4165")
     private ControlFlow interpret(Object obj) {
         ControlFlow flow = Continue;
         if (obj == null)
@@ -199,16 +212,19 @@ public class RuleContext implements GroovyObject {
         }
     }
 
+    @Override
     public Object getProperty(String property) {
         if ("result".equals(property))
             return getResult();
         return properties.get(property);
     }
 
+    @Override
     public void setProperty(String property, Object newValue) {
         properties.put(property, newValue);
     }
 
+    @Override
     public Object invokeMethod(String name, Object args) {
         try {
             return getMetaClass().invokeMethod(this, name, args);

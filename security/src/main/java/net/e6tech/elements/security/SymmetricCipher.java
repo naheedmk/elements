@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,7 +23,6 @@ import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.IvParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
-import javax.xml.bind.DatatypeConverter;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.security.*;
@@ -41,24 +40,29 @@ public class SymmetricCipher {
 
     static final Logger logger = Logger.getLogger();
 
-    private String algorithm = "AES";
-    private String transformation = algorithm + "/CBC/PKCS7PADDING";
-    private int keyLength = 256;
+    private String algorithm;
+    private String transformation;
+    private int keyLength;
     private boolean base64 = false;
 
     static {
         initialize();
     }
 
-    protected SymmetricCipher(String algorithm) {
+    protected SymmetricCipher(String algorithm, int keyLength) {
         this.algorithm = algorithm;
         this.transformation = algorithm + "/CBC/PKCS7PADDING";
+        this.keyLength = keyLength;
         generateKeySpec(); // prime the pump
     }
 
     public static SymmetricCipher getInstance(String algorithm) {
+        return getInstance(algorithm, 256);
+    }
+
+    public static SymmetricCipher getInstance(String algorithm, int keyLength) {
         if (ALGORITHM_AES.equalsIgnoreCase(algorithm)) {
-            return new SymmetricCipher(ALGORITHM_AES);
+            return new SymmetricCipher(ALGORITHM_AES, keyLength);
         } else {
             throw new IllegalArgumentException(algorithm + " is not supported");
         }
@@ -68,21 +72,51 @@ public class SymmetricCipher {
         return algorithm;
     }
 
-    @SuppressWarnings("squid:CommentedOutCodeLine")
     public static void initialize() {
         if (initialized)
             return;
         initialized = true;
         Security.addProvider(new org.bouncycastle.jce.provider.BouncyCastleProvider());
 
+        String version = System.getProperty("java.version");
+        String[] components = version.split("\\.");
+
+        int major;
+        if (components[0].equals("1")) {
+            try {
+                major = Integer.valueOf(components[1]);
+            } catch (NumberFormatException ex) {
+                major = 8;
+            }
+        } else {
+            try {
+                major = Integer.valueOf(components[0]);
+            } catch (NumberFormatException ex) {
+                major = 9;
+            }
+        }
+        if (major >= 9)
+            unlimitedCrypto9();
+        else
+            unlimitedCrypto8();
+    }
+
+    @SuppressWarnings("squid:CommentedOutCodeLine")
+    private static void unlimitedCrypto9() {
+        // In Java 9, default is unlimited.
+        // Security.setProperty("crypto.policy", "unlimited");
+    }
+
+    @SuppressWarnings("squid:CommentedOutCodeLine")
+    private static void unlimitedCrypto8() {
         try {
-        /*
-         * Do the following, but with reflection to bypass access checks:
-         *
-         * JceSecurity.isRestricted = false;
-         * JceSecurity.defaultPolicy.perms.clear();
-         * JceSecurity.defaultPolicy.add(CryptoAllPermission.INSTANCE);
-         */
+            /*
+             * Do the following, but with reflection to bypass access checks:
+             *
+             * JceSecurity.isRestricted = false;
+             * JceSecurity.defaultPolicy.perms.clear();
+             * JceSecurity.defaultPolicy.add(CryptoAllPermission.INSTANCE);
+             */
             final Class<?> jceSecurity = Class.forName("javax.crypto.JceSecurity");
             final Class<?> cryptoPermissions = Class.forName("javax.crypto.CryptoPermissions");
             final Class<?> cryptoAllPermission = Class.forName("javax.crypto.CryptoAllPermission");
@@ -126,28 +160,29 @@ public class SymmetricCipher {
         this.base64 = base64;
     }
 
-    public static byte[] toBytes(String hexString) {
-        return DatatypeConverter.parseHexBinary(hexString);
+    public byte[] toBytes(String string) {
+        if (base64)
+            return Base64.getDecoder().decode(string);
+        else
+            return Hex.toBytes(string);
     }
 
-    public static String toString(byte[] bytes) {
-        return DatatypeConverter.printHexBinary(bytes);
+    public String toString(byte[] bytes) {
+        if (base64) {
+            return Base64.getEncoder().encodeToString(bytes);
+        } else {
+            return Hex.toString(bytes);
+        }
     }
 
     public String encrypt(SecretKey key, byte[] plain, String iv) throws GeneralSecurityException {
         byte[] ivBytes = null;
         if (iv != null) {
-            if (base64)
-                ivBytes = Base64.getDecoder().decode(iv);
-            else ivBytes = Hex.toBytes(iv);
+            ivBytes = toBytes(iv);
         }
         byte[] encrypted = encryptBytes(key, plain, ivBytes);
 
-        if (base64) {
-            return Base64.getEncoder().encodeToString(encrypted);
-        } else {
-            return Hex.toString(encrypted);
-        }
+        return toString(encrypted);
     }
 
     public byte[] encryptBytes(SecretKey key, byte[] plain, byte[] initVector) throws GeneralSecurityException {
@@ -166,18 +201,10 @@ public class SymmetricCipher {
 
     public byte[] decrypt(SecretKey key, String encrypted, String initVector) throws GeneralSecurityException {
         byte[] ivBytes = null;
-        String iv = initVector;
-        if (iv != null) {
-            if (base64)
-                ivBytes = Base64.getDecoder().decode(iv);
-            else ivBytes = Hex.toBytes(iv);
+        if (initVector != null) {
+            ivBytes = toBytes(initVector);
         }
-        byte[] decodedBytes = null;
-        if (base64) {
-            decodedBytes = Base64.getDecoder().decode(encrypted);
-        } else {
-            decodedBytes = Hex.toBytes(encrypted);
-        }
+        byte[] decodedBytes = toBytes(encrypted);
         return decryptBytes(key, decodedBytes, ivBytes);
     }
 

@@ -22,7 +22,6 @@ import org.hibernate.boot.model.relational.QualifiedName;
 import org.hibernate.boot.model.relational.QualifiedNameParser;
 import org.hibernate.engine.jdbc.env.spi.JdbcEnvironment;
 import org.hibernate.id.enhanced.StandardOptimizerDescriptor;
-import org.hibernate.id.enhanced.TableGenerator;
 import org.hibernate.internal.util.config.ConfigurationHelper;
 import org.hibernate.service.ServiceRegistry;
 import org.hibernate.type.Type;
@@ -33,11 +32,13 @@ import java.util.Properties;
  * This class uses a table to generate primary key.
  * Created by futeh.
  */
-public class TableIdGenerator extends TableGenerator implements Cloneable {
+public class TableIdGenerator extends ModifiedTableGenerator implements Cloneable {
 
     private String defaultTableName = "sequence";
-    private int defaultInitialValue = 1;
+    private long defaultInitialValue = 1;
     private int defaultIncrementSize = 100;
+    private String defaultOptimizer = StandardOptimizerDescriptor.POOLED_LO.getExternalName();
+    private String segmentValuePrefix = "";
 
     @SuppressWarnings("squid:S2975") // we really want clone!
     public TableIdGenerator clone() {
@@ -56,11 +57,11 @@ public class TableIdGenerator extends TableGenerator implements Cloneable {
         this.defaultTableName = defaultTableName;
     }
 
-    public int getDefaultInitialValue() {
+    public long getDefaultInitialValue() {
         return defaultInitialValue;
     }
 
-    public void setDefaultInitialValue(int defaultInitialValue) {
+    public void setDefaultInitialValue(long defaultInitialValue) {
         this.defaultInitialValue = defaultInitialValue;
     }
 
@@ -72,8 +73,24 @@ public class TableIdGenerator extends TableGenerator implements Cloneable {
         this.defaultIncrementSize = defaultIncrementSize;
     }
 
+    public String getDefaultOptimizer() {
+        return defaultOptimizer;
+    }
+
+    public void setDefaultOptimizer(String defaultOptimizer) {
+        this.defaultOptimizer = defaultOptimizer;
+    }
+
+    public String getSegmentValuePrefix() {
+        return segmentValuePrefix;
+    }
+
+    public void setSegmentValuePrefix(String segmentValuePrefix) {
+        this.segmentValuePrefix = segmentValuePrefix;
+    }
+
     @Override
-    protected QualifiedName determineGeneratorTableName(Properties params, JdbcEnvironment jdbcEnvironment) {
+    protected QualifiedName determineGeneratorTableName(Properties params, JdbcEnvironment jdbcEnvironment, ServiceRegistry serviceRegistry) {
         final String tableName = ConfigurationHelper.getString( TABLE_PARAM, params, defaultTableName );
 
         if ( tableName.contains( "." ) ) {
@@ -94,8 +111,18 @@ public class TableIdGenerator extends TableGenerator implements Cloneable {
     }
 
     @Override
-    protected int determineInitialValue(Properties params) {
-        return ConfigurationHelper.getInt( INITIAL_PARAM, params, defaultInitialValue );
+    protected String determineSegmentValue(Properties params) {
+        String segmentValue = super.determineSegmentValue(params);
+        return (getSegmentValuePrefix() == null || getSegmentValuePrefix().isEmpty()) ? segmentValue : getSegmentValuePrefix() + segmentValue;
+    }
+
+    @Override
+    protected long determineInitialValue(Properties params) {
+        long value =  ConfigurationHelper.getLong( INITIAL_PARAM, params, -1 );
+        if (value == -1) {
+            return defaultInitialValue;
+        }
+        return value;
     }
 
     @Override
@@ -111,7 +138,7 @@ public class TableIdGenerator extends TableGenerator implements Cloneable {
     @Override
     public void configure(Type type, Properties params, ServiceRegistry serviceRegistry) {
         if (params.getProperty(OPT_PARAM) == null) {
-            params.setProperty(OPT_PARAM, StandardOptimizerDescriptor.POOLED_LO.getExternalName());
+            params.setProperty(OPT_PARAM, defaultOptimizer);
         }
         super.configure(type, params, serviceRegistry);
     }

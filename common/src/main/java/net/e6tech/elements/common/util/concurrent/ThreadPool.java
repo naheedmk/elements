@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,10 @@ package net.e6tech.elements.common.util.concurrent;
 
 import net.e6tech.elements.common.resources.BindClass;
 
-import java.util.*;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.*;
 import java.util.function.Function;
 
@@ -32,19 +35,13 @@ public class ThreadPool implements java.util.concurrent.ThreadFactory, ExecutorS
     private static Map<String, ThreadPool> rateLimitedThreadPools = new HashMap<>();
     private static Map<String, ThreadPool> fixedThreadPools = new HashMap<>();
 
-    private ThreadGroup threadGroup;
     private String name;
     private boolean daemon = true;
     private ExecutorService executorService;
 
-    protected ThreadPool(ThreadGroup threadGroup, String name, Function<ThreadFactory, ExecutorService> newPool) {
-        this.threadGroup = threadGroup;
+    protected ThreadPool(String name, Function<ThreadFactory, ExecutorService> newPool) {
         this.name = name;
         this.executorService = newPool.apply(this);
-    }
-
-    protected ThreadPool(String name, Function<ThreadFactory, ExecutorService> newPool) {
-        this(Thread.currentThread().getThreadGroup(), name, newPool);
     }
 
     /**
@@ -91,11 +88,6 @@ public class ThreadPool implements java.util.concurrent.ThreadFactory, ExecutorS
         return this;
     }
 
-    public ThreadPool threadGroup(ThreadGroup threadGroup) {
-        this.threadGroup = threadGroup;
-        return this;
-    }
-
     public ThreadPool rejectedExecutionHandler(RejectedExecutionHandler handler) {
         if (handler == null)
             throw new NullPointerException();
@@ -105,13 +97,18 @@ public class ThreadPool implements java.util.concurrent.ThreadFactory, ExecutorS
         return this;
     }
 
+    public <U> Async<U> async(U service) {
+        return new AsyncImpl<>(this, service);
+    }
+
+    @SuppressWarnings("unchecked")
     public <T extends ExecutorService> T unwrap() {
         return (T) executorService;
     }
 
     @Override
     public Thread newThread(Runnable runnable) {
-        Thread thread = new Thread(threadGroup, runnable, "Broadcast");
+        Thread thread = new Thread(runnable, "Broadcast");
         thread.setName(name + "-" + thread.getId());
         thread.setDaemon(daemon);
         return thread;
@@ -124,7 +121,7 @@ public class ThreadPool implements java.util.concurrent.ThreadFactory, ExecutorS
 
     @Override
     public List<Runnable> shutdownNow() {
-        return Collections.emptyList();
+        return executorService.shutdownNow();
     }
 
     @Override

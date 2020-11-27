@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,17 +19,7 @@ package net.e6tech.elements.web.security.vault.client;
  * Created by futeh.
  */
 public class Action {
-    String token;
-
     public String getType() {
         return getClass().getSimpleName();
-    }
-
-    public String getToken() {
-        return token;
-    }
-
-    public void setToken(String token) {
-        this.token = token;
     }
 }

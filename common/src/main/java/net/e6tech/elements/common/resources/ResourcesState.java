@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,10 @@ import java.util.concurrent.Callable;
 /**
  * Created by futeh.
  */
+@SuppressWarnings("unchecked")
 class ResourcesState {
+
+    private static final List<ResourceProvider> emptyResourceProviders = Collections.unmodifiableList(new ArrayList<>());
 
     enum State {
         INITIAL,
@@ -42,9 +45,10 @@ class ResourcesState {
     private Module module;
     private Injector injector;
     private State state = State.INITIAL;
-    private boolean dirty = false; // dirty if not open and bind is call.
     private List<ResourceProvider> resourceProviders = new LinkedList<>();
     private LinkedList<Object> injectionList = new LinkedList<>();
+    private List<ResourceProvider> externalResourceProviders;
+    private Map<String, Object> variables;
 
     ResourcesState(Resources resources) {
         factory = resources.getResourceManager().getModule().getFactory();
@@ -57,19 +61,11 @@ class ResourcesState {
         state = State.INITIAL;
         injectionList.clear();
         injector = null;
-        dirty = false;
+        externalResourceProviders = null;
     }
 
     public Module getModule() {
         return module;
-    }
-
-    public Injector getInjector() {
-        return injector;
-    }
-
-    public void setInjector(Injector injector) {
-        this.injector = injector;
     }
 
     public State getState() {
@@ -80,14 +76,6 @@ class ResourcesState {
         this.state = state;
     }
 
-    public boolean isDirty() {
-        return dirty;
-    }
-
-    public void setDirty(boolean dirty) {
-        this.dirty = dirty;
-    }
-
     public List<ResourceProvider> getResourceProviders() {
         return resourceProviders;
     }
@@ -96,18 +84,18 @@ class ResourcesState {
         this.resourceProviders = resourceProviders;
     }
 
-    public List<Object> getInjectionList() {
-        return injectionList;
+    List<ResourceProvider> getExternalResourceProviders() {
+        if (externalResourceProviders == null)
+            return emptyResourceProviders;
+        return externalResourceProviders;
     }
 
-    public void setInjectionList(List<Object> injectionList) {
-        this.injectionList = new LinkedList<>();
-        this.injectionList.addAll(injectionList);
+    void setExternalResourceProviders(List<ResourceProvider> externalResourceProviders) {
+        this.externalResourceProviders = externalResourceProviders;
     }
 
     public void addModule(Module module) {
         this.module.add(module);
-        setDirty(true);
     }
 
     protected void onOpen(Resources resources) {
@@ -116,21 +104,22 @@ class ResourcesState {
         }
     }
 
-    protected void createInjector(Resources resources) {
-        injector = (resources.getResourceManager() != null) ?
-                getModule().build(resources.getResourceManager().getModule())
-                : getModule().build();
+    protected Injector createInjector(Resources resources) {
+        if (injector == null || !injectionList.isEmpty()) {
+            injector = (resources.getResourceManager() != null) ?
+                    getModule().build(resources.getResourceManager().getModule())
+                    : getModule().build();
 
-        setDirty(false);
-
-        // we need to inject here for objects awaiting to be injected because
-        // resourceProviders may depend on these objects.
-        while (!injectionList.isEmpty()) {
-            // need to remove item because it may make resources dirty again calling bind or rebind.  In such a case
-            // onOpen will be call again.
-            Object obj = injectionList.remove();
-            privateInject(resources, injector, obj);
+            // we need to inject here for objects awaiting to be injected because
+            // resourceProviders may depend on these objects.
+            while (!injectionList.isEmpty()) {
+                // need to remove item because it may make resources dirty again calling bind or rebind.  In such a case
+                // onOpen will be call again.
+                Object obj = injectionList.remove();
+                privateInject(resources, injector, obj);
+            }
         }
+        return injector;
     }
 
     public <T> T inject(Resources resources, T object) {
@@ -141,11 +130,8 @@ class ResourcesState {
             // to be inject when resources is opened.
             injectionList.add(object);
         } else {
-            if (isDirty() || injector == null) {
-                createInjector(resources);
-            }
+            createInjector(resources);
             privateInject(resources, injector, object);
-
         }
         return object;
     }
@@ -171,7 +157,6 @@ class ResourcesState {
         } catch (Exception e) {
             throw new SystemException(e);
         }
-        setDirty(true);
         return instance;
     }
 
@@ -180,20 +165,17 @@ class ResourcesState {
         if (o != null)
             throw new AlreadyBoundException(CLASS_MSG + cls + BOUND_TO_MSG + o);
 
-        T instance = (T) getModule().bindInstance(cls, resource);
-        setDirty(true);
-        return instance;
+        return (T) getModule().bindInstance(cls, resource);
     }
 
     public <T> T rebind(Class<T> cls, T resource) {
         T instance = null;
 
         try {
-            instance = (T) getModule().bindInstance(cls, resource);
+            instance = (T) getModule().rebindInstance(cls, resource);
         } catch (Exception e) {
             throw new SystemException(e);
         }
-        setDirty(true);
         return instance;
     }
 
@@ -204,7 +186,6 @@ class ResourcesState {
         } catch (Exception e) {
             throw new SystemException(e);
         }
-        setDirty(true);
         return instance;
     }
 
@@ -215,7 +196,6 @@ class ResourcesState {
         if (service != null)
             getModule().bindClass(cls, service);
         else getModule().bindInstance(cls, null);
-        setDirty(true);
     }
 
     public <T> T bindNamedInstance(Class<T> cls, String name, T resource) {
@@ -226,22 +206,30 @@ class ResourcesState {
     }
 
     public <T> T rebindNamedInstance(Class<T> cls, String name, T resource) {
-        T instance = (T) getModule().bindNamedInstance(cls, name, resource);
-        setDirty(true);
+        return (T) getModule().rebindNamedInstance(cls, name, resource);
+    }
+
+    public <T> T getNamedInstance(Resources resources, Class<T> cls, String name) {
+        T instance = null;
+        if (state == State.INITIAL) {
+            if (getModule().getBoundNamedInstance(cls, name) != null)
+                instance = getModule().getBoundNamedInstance(cls, name);
+            else if (resources.getResourceManager().getModule().getBoundNamedInstance(cls, name) != null)
+                instance = resources.getResourceManager().getModule().getBoundNamedInstance(cls, name);
+        } else {
+            instance = createInjector(resources).getNamedInstance(cls, name);
+        }
+        if (instance == null) {
+            throw new InstanceNotFoundException("No instance for class " + cls.getName() +
+                    ". Use newInstance if you meant to create an instance.");
+        }
         return instance;
     }
 
     public boolean hasInstance(Resources resources, Class cls) {
         if (cls.isAssignableFrom(Resources.class) || cls.isAssignableFrom(ResourceManager.class))
             return true;
-
-        if (getInjector() == null) {
-            if (resources.getResourceManager().hasInstance(cls))
-                return true;
-            return getModule().getBoundInstance(cls) != null;
-        } else {
-            return getInjector().getInstance(cls) != null;
-        }
+        return getModule().getBoundInstance(cls) != null || resources.getResourceManager().hasInstance(cls);
     }
 
     public <T> T getInstance(Resources resources, Class<T> cls) {
@@ -251,21 +239,39 @@ class ResourcesState {
             return (T) resources.getResourceManager();
         }
 
-        if (state == State.INITIAL || isDirty()) {
+        T instance = null;
+        if (state == State.INITIAL) {
             if (getModule().getBoundInstance(cls) != null)
-                return getModule().getBoundInstance(cls);
-            if (resources.getResourceManager().hasInstance(cls))
-                return resources.getResourceManager().getInstance(cls);
-
-            // not found
-            createInjector(resources);
+                instance = getModule().getBoundInstance(cls);
+            else if (resources.getResourceManager().hasInstance(cls))
+                instance = resources.getResourceManager().getInstance(cls);
+        } else {
+             instance = createInjector(resources).getInstance(cls);
         }
-
-        T instance = getInjector().getInstance(cls);
         if (instance == null) {
             throw new InstanceNotFoundException("No instance for class " + cls.getName() +
                     ". Use newInstance if you meant to create an instance.");
         }
         return instance;
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> Optional<T> getVariable(String key) {
+        if (variables == null)
+            return Optional.empty();
+        T t = (T) variables.get(key);
+        return Optional.ofNullable(t);
+    }
+
+    public void setVariable(String key, Object val) {
+        if (variables == null)
+            variables = new HashMap<>();
+        variables.put(key, val);
+    }
+
+    public <T> Map<String, T> computeMapIfAbsent(Class<T> key) {
+        if (variables == null)
+            variables = new HashMap<>();
+        return (Map<String, T>) variables.computeIfAbsent(key.toString(), k -> new LinkedHashMap<>());
     }
 }

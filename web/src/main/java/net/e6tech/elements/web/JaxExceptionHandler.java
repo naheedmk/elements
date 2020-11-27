@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,12 +16,12 @@
 
 package net.e6tech.elements.web;
 
-import java.lang.reflect.Method;
+import net.e6tech.elements.common.interceptor.CallFrame;
 
 /**
  * Created by futeh.
  */
 @FunctionalInterface
 public interface JaxExceptionHandler {
-    Object handleException(Method method, Object[] args, Throwable throwable);
+    Object handleException(CallFrame frame, Throwable throwable);
 }

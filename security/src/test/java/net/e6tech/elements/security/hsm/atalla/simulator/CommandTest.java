@@ -35,11 +35,12 @@ public abstract class CommandTest<T extends Command> {
         initCommand();
     }
 
+    @SuppressWarnings("unchecked")
     protected void initCommand() {
         ParameterizedType type = (ParameterizedType) getClass().getGenericSuperclass();
         Class cls = (Class) type.getActualTypeArguments()[0];
         try {
-            command = (T) cls.newInstance();
+            command = (T) cls.getDeclaredConstructor().newInstance();
             command.simulator = simulator;
         } catch (Exception e) {
             throw new SystemException(e);

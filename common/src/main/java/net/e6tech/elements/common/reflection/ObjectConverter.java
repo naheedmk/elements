@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@ import java.util.Iterator;
 /**
  * Created by futeh.
  */
+@SuppressWarnings("unchecked")
 public class ObjectConverter {
 
     public static final  ObjectMapper mapper;
@@ -70,7 +71,7 @@ public class ObjectConverter {
         return convert(from, field.getGenericType(), listener);
     }
 
-    @SuppressWarnings("squid:S134")
+    @SuppressWarnings({"squid:S134", "squid:S3776"})
     public Object convert(Object from, Type toType, InstanceCreationListener listener) throws IOException {
         Object converted;
         if (toType instanceof Class) {
@@ -107,7 +108,7 @@ public class ObjectConverter {
         return converted;
     }
 
-    @SuppressWarnings("squid:MethodCyclomaticComplexity")
+    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S3776"})
     private Object convert(Object val, Class toType, InstanceCreationListener instanceCreation) throws IOException {
         Object value = val;
         Class fromType = value.getClass();
@@ -157,7 +158,7 @@ public class ObjectConverter {
                 // class name.  We load the class and create an instance.
                 try {
                     Class cls = getClass().getClassLoader().loadClass((String) value);
-                    value = cls.newInstance();
+                    value = cls.getDeclaredConstructor().newInstance();
                     if (instanceCreation != null)
                         instanceCreation.instanceCreated(value, toType, value);
                     return value;

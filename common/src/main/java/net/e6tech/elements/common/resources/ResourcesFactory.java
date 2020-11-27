@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,9 +25,7 @@ import java.util.function.Consumer;
  * Created by futeh on 12/19/15.
  */
 public class ResourcesFactory implements Configurable<ResourcesFactory> {
-
-    @Inject
-    protected Provision provision;
+    private Provision provision;
 
     private Configurator configurator = new Configurator();
 
@@ -57,5 +55,10 @@ public class ResourcesFactory implements Configurable<ResourcesFactory> {
 
     public Provision getProvision() {
         return provision;
+    }
+
+    @Inject
+    public void setProvision(Provision provision) {
+        this.provision = provision;
     }
 }

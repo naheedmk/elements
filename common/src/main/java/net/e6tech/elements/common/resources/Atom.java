@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,10 +24,11 @@ import net.e6tech.elements.common.notification.Notification;
 import net.e6tech.elements.common.notification.NotificationListener;
 import net.e6tech.elements.common.reflection.Reflection;
 import net.e6tech.elements.common.util.SystemException;
+import net.e6tech.elements.common.util.datastructure.Pair;
 
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
-import javax.script.ScriptException;
+import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -35,8 +36,10 @@ import java.util.function.Consumer;
 /**
  * Created by futeh.
  */
-@SuppressWarnings({"squid:S1845", "squid:S3776"})
+@SuppressWarnings({"unchecked", "squid:S1845", "squid:S3776"})
 public class Atom implements Map<String, Object> {
+    public static final String OVERRIDE_SETTINGS = "__atom_override_settings";
+    public static final String OVERRIDE_NAME = "__atom_override_name";
     private static Logger logger = Logger.getLogger();
     private static final String WAIT_FOR = "waitFor";
     private static final String PRE_INIT = "preInit";
@@ -52,12 +55,15 @@ public class Atom implements Map<String, Object> {
     private ResourceManager resourceManager;
     private Resources resources;
     private Map<String, Object> boundInstances = new LinkedHashMap<>();
+    private Map<String, Object> overrideSettings = new LinkedHashMap<>();
+    private Map<String, Object> defaultSettings = new LinkedHashMap<>();
     private Configuration configuration;
-    private List<Configurable> configurables = new ArrayList<>();
     private String name;
     private Map<String, BiConsumer<String, Object>> directives = new HashMap<>();
     private BeanLifecycle beanLifecycle;
     private boolean prototype = false;
+    private Configuration.Resolver resolver = this::resolve;
+    private ClassLoader scriptLoader;
 
     Atom(ResourceManager resourceManager) {
         this.resourceManager = resourceManager;
@@ -67,19 +73,43 @@ public class Atom implements Map<String, Object> {
         // transaction may be started.  Don't want that. Just want resources for setting up instances.
         // Since ResourceProviders are not open, no need to commit or abort resources.
         resources = resourceManager.newResources();
-        BiConsumer<String, Object> put = (key, value) -> boundInstances.put(key, value);
+        resources.bind(Configuration.Resolver.class, resolver);
+        resources.bind(Atom.class, this);
+        resourceManager.getVariable(OVERRIDE_SETTINGS).ifPresent(map -> overrideSettings = resourceManager.nullableVar(OVERRIDE_SETTINGS));
+
+        BiConsumer<String, Object> addClosure = (key, value) -> {
+            Object existing = boundInstances.get(key);
+            List<Closure> list;
+            if (existing instanceof List) {
+                list = (List<Closure>) existing;
+            } else {
+                list = new LinkedList<>();
+                boundInstances.put(key, list);
+            }
+            if (value instanceof Closure) {
+                Closure closure = (Closure) value;
+                list.add(closure);
+                closure.setResolveStrategy(Closure.DELEGATE_FIRST);
+                closure.setDelegate(this);
+            }
+        };
         directives.put(CONFIGURATION, (key, value) -> {
             if (value != null) {
-                configuration = new Configuration(resourceManager.getScripting().getProperties());
-                configuration.load(value.toString());
+                if (configuration == null) {
+                    configuration = new Configuration(resourceManager.getScripting().getProperties());
+                    configuration.load(value.toString());
+                } else {
+                    Configuration more = new Configuration(resourceManager.getScripting().getProperties());
+                    more.load(value.toString());
+                    configuration.load(more);
+                }
                 resources.configurator.putAll(configuration);
             }
         });
-        directives.put(WAIT_FOR, (key, value) -> (new MyBeanListener()).invokeMethod(key, new Object[]{value}));
-        directives.put(PRE_INIT, put);
-        directives.put(POST_INIT, put);
-        directives.put(AFTER, (key, value) -> runAfter(value));
-        directives.put(LAUNCHED, (key, value) -> runLaunched(value));
+        directives.put(PRE_INIT, addClosure);
+        directives.put(POST_INIT, addClosure);
+        directives.put(AFTER, addClosure);
+        directives.put(LAUNCHED, addClosure);
         directives.put(EXEC, (key, value) -> {
             try {
                 if (value instanceof String) {
@@ -88,7 +118,6 @@ public class Atom implements Map<String, Object> {
                     resourceManager.exec(((List) value).toArray(new Object[0]));
                 }
             } catch (RuntimeException e) {
-                logger.trace(e.getMessage(), e);
                 throw new NestedScriptException(e.getCause());
             }
         });
@@ -103,23 +132,16 @@ public class Atom implements Map<String, Object> {
             throw new IllegalArgumentException("Atom named " + prototype.getName() + " is not a prototype.");
         resources = prototype.resources;
         boundInstances = prototype.boundInstances;
-
+        resources.rebind(Configuration.Resolver.class, resolver);
         // do not copy configuration
     }
 
-    /**
-     * Used by groovy scripts.
-     *
-     * @param cls      The class that identifies the binding object.
-     * @param resource the object to be bound to the {@code cls}
-     * @param <T>      type of resource
-     * @return return the resource object.  If resource is a Class, returns new instance of the class.
-     */
-    public <T> T bind(Class<T> cls, T resource) {
-        return resources.bind(cls, resource);
-    }
-
     public <T> T resourceManagerBind(Class<T> cls, T resource) {
+        if (cls == null) {
+            String classDesc = (resource == null) ? "" : " Expecting " + resource.getClass().getName() + " or its super class";
+            logger.error("Please import the appropriate class in the script.{}", classDesc);
+            throw new IllegalArgumentException();
+        }
         resources.unbind(cls);
         return resourceManager.bind(cls, resource);
     }
@@ -140,6 +162,30 @@ public class Atom implements Map<String, Object> {
         this.name = name;
     }
 
+    public Map<String, Object> getOverrideSettings() {
+        return overrideSettings;
+    }
+
+    public void setOverrideSettings(Map<String, Object> overrideSettings) {
+        this.overrideSettings = overrideSettings;
+    }
+
+    public Map<String, Object> getDefaultSettings() {
+        return defaultSettings;
+    }
+
+    public void setDefaultSettings(Map<String, Object> defaultSettings) {
+        this.defaultSettings = defaultSettings;
+    }
+
+    public ClassLoader getScriptLoader() {
+        return scriptLoader;
+    }
+
+    public void setScriptLoader(ClassLoader scriptLoader) {
+        this.scriptLoader = scriptLoader;
+    }
+
     public void bindInitialContext(String key, Object value) {
         try {
             (new InitialContext()).bind(key, value);
@@ -152,6 +198,21 @@ public class Atom implements Map<String, Object> {
         if (configuration == null)
             return null;
         return Collections.unmodifiableMap(configuration);
+    }
+
+    private Object resolve(String expression) {
+        try {
+            String exp = expression;
+            while (exp.startsWith("^"))
+                exp = exp.substring(1);
+            Closure closure = (Closure) resourceManager.getScripting().eval("{->" + exp + " }");
+            closure.setDelegate(this);
+            closure.setResolveStrategy(Closure.DELEGATE_FIRST);
+            return closure.call();
+        } catch (MissingPropertyException e) {
+            logger.trace(e.getMessage(), e);
+            return null;
+        }
     }
 
     public void configure(Object obj) {
@@ -169,28 +230,18 @@ public class Atom implements Map<String, Object> {
         }
 
         if (configuration == null) {
-            configurables.add(new Configurable(obj, prefix));
             return;
         }
+
+        if (obj instanceof Instantiated)
+            ((Instantiated) obj).instantiated(resources);
 
         if (obj != null)
             boundInstances.put(prefix, obj); // needed here because annotate may execute a script that requires the instance.
         // when a config string begin with ^, it is turned into a closure.  The expression is
         // then executed in configuration.annotate.
         configuration.configure(obj, prefix,
-                str -> {
-                    try {
-                        Closure closure = (Closure) resourceManager.getScripting().eval("{ it ->" + str + " }");
-                        closure.setDelegate(this);
-                        closure.setResolveStrategy(Closure.DELEGATE_FIRST);
-                        return closure.call(obj);
-                    } catch (MissingPropertyException e) {
-                        logger.trace(e.getMessage(), e);
-                        return null;
-                    } catch (ScriptException e) {
-                        throw new SystemException(e);
-                    }
-                },
+                this::resolve,
                 (value, toType, instance) -> {
                     if (instance != null) {
                         Package p = instance.getClass().getPackage();
@@ -204,39 +255,24 @@ public class Atom implements Map<String, Object> {
 
     @SuppressWarnings({"squid:S134", "squid:MethodCyclomaticComplexity"})
     public Atom build() {
+        if (isPrototype())
+            return this;
+
         long start = System.currentTimeMillis();
-        if (configuration != null) {
-            for (Configurable configurable : configurables) {
-                configuration.configure(configurable.instance, configurable.prefix,
-                        this::get,
-                        (value, toType, instance) -> {
-                            if (instance != null) {
-                                Package p = instance.getClass().getPackage();
-                                if (p == null
-                                        || (!p.getName().startsWith("java.")
-                                        && !p.getName().startsWith("javax.")))
-                                    resources.inject(instance);
-                            }
-                        });
-            }
-        }
-        configurables.clear();
-
         resources.onOpen();
-
         boundInstances.values().forEach(resources::inject);
 
-        if (get(PRE_INIT) != null) {
-            Object obj = get(PRE_INIT);
-            // obj should be a closure
-            resourceManager.runNow(this, obj);
-        }
+        // install waiting, after and launched logic
+        runWaitFor(boundInstances.get(WAIT_FOR));
+        runAfter(boundInstances.get(AFTER));
+        runLaunched(boundInstances.get(LAUNCHED));
 
+        run(boundInstances.get(PRE_INIT));
+
+        // call initialized for beans that implment Initializable
         for (Map.Entry<String, Object> entry : boundInstances.entrySet()) {
             Object value = entry.getValue();
-            if (beanLifecycle.isBeanInitialized(value))
-                continue;
-            if (value instanceof Initializable) {
+            if (value instanceof Initializable && !beanLifecycle.isBeanInitialized(value)) {
                 ((Initializable) value).initialize(resources);
             }
             if (!resourceManager.getScripting().isRunnable(value)) {
@@ -244,11 +280,7 @@ public class Atom implements Map<String, Object> {
             }
         }
 
-        if (get(POST_INIT) != null) {
-            Object obj = get(POST_INIT);
-            // obj should be a closure
-            resourceManager.runNow(this, obj);
-        }
+        run(boundInstances.get(POST_INIT));
 
         // running object that implements Startable
         if (boundInstances.size() > 0) {
@@ -280,9 +312,14 @@ public class Atom implements Map<String, Object> {
         // this only applies when the Atom is created outside of loading a script.
         resourceManager.runAfterIfNotLoading();
 
-        logger.info("Atom {} loaded in {}ms", getName(), (System.currentTimeMillis() - start));
+        if (!resourceManager.isSilent())
+            logger.info("Atom {} loaded in {}ms", getName(), (System.currentTimeMillis() - start));
 
         return this;
+    }
+
+    public void disable(Object bean) {
+        resourceManager.getBeanLifecycle().disableBean(bean);
     }
 
     // not using closure to minimize Component reference
@@ -303,15 +340,17 @@ public class Atom implements Map<String, Object> {
             try {
                 for (Map.Entry<String, Startable> entry : startables.entrySet()) {
                     Startable startable = entry.getValue();
-                    if (!resourceManager.getBeanLifecycle().isBeanStarted(startable)) {
+                    BeanLifecycle lifecycle = resourceManager.getBeanLifecycle();
+                    if (!lifecycle.isBeanStarted(startable) && !lifecycle.isBeanDisabled(startable)) {
                         long s = System.currentTimeMillis();
                         startable.start();
-                        logger.info("Class {} started in {}ms", startable.getClass().getName(), (System.currentTimeMillis() - s));
+                        if (!resourceManager.isSilent())
+                            logger.info("Class {} started in {}ms", startable.getClass().getName(), (System.currentTimeMillis() - s));
                         resourceManager.getBeanLifecycle().fireBeanStarted(entry.getKey(), startable);
                     }
                 }
             } catch (RuntimeException ex) {
-                logger.error("Error running startable component name = " + name);
+                logger.error("Error running startable component name = {}", name);
                 throw ex;
             }
         }
@@ -334,13 +373,14 @@ public class Atom implements Map<String, Object> {
             try {
                 for (Map.Entry<String, LaunchListener> entry : listeners.entrySet()) {
                     LaunchListener listener = entry.getValue();
-                    if (!provision.getResourceManager().getBeanLifecycle().isBeanLaunched(listener)) {
+                    BeanLifecycle lifecycle = provision.getResourceManager().getBeanLifecycle();
+                    if (!lifecycle.isBeanLaunched(listener) && !lifecycle.isBeanDisabled(listener)) {
                         listener.launched(provision);
                         provision.getResourceManager().getBeanLifecycle().fireBeanLaunched(entry.getKey(), listener);
                     }
                 }
             } catch (RuntimeException ex) {
-                logger.error("Error running launched component name = " + name);
+                logger.error("Error running launched component name = {}", name);
                 throw ex;
             }
         }
@@ -349,7 +389,6 @@ public class Atom implements Map<String, Object> {
     protected void cleanup() {
         resources.cleanup();
         configuration = null;
-        configurables = null;
         boundInstances = null;
         resources = null;
         resourceManager = null;
@@ -363,8 +402,8 @@ public class Atom implements Map<String, Object> {
             res = resourceManager.open(null);
             consumer.accept(res);
         } finally {
-            if (resources != null)
-                resources.commit();
+            if (res != null)
+                res.commit();
         }
         return this;
     }
@@ -376,19 +415,83 @@ public class Atom implements Map<String, Object> {
     /*
      * runs callable after every script is loaded
      */
-    public void runAfter(Object callable) {
-        resourceManager.runAfter(callable);
+    public void runAfter(Object obj) {
+        if (obj == null)
+            return;
+        if (obj instanceof List) {
+            List l = (List) obj;
+            for (Object o : l)
+                resourceManager.runAfter(o);
+        } else {
+            resourceManager.runAfter(obj);
+        }
     }
 
-    public void run(Object callable) {
-        resourceManager.runNow(this, callable);
+    public void run(Object caller, Object obj) {
+        if (obj == null)
+            return;
+        if (obj instanceof List) {
+            List l = (List) obj;
+            for (Object o : l)
+                resourceManager.runNow(caller, o);
+        } else {
+            resourceManager.runNow(caller, obj);
+        }
+    }
+
+    public void run(Object obj) {
+        run(this, obj);
     }
 
     /*
      * runs after all resourceManagers are launched.
      */
-    public void runLaunched(Object callable) {
-        resourceManager.getScripting().runLaunched(callable);
+    public void runLaunched(Object obj) {
+        if (obj == null)
+            return;
+        if (obj instanceof List) {
+            List l = (List) obj;
+            for (Object o : l)
+                resourceManager.getScripting().runLaunched(o);
+        } else {
+            resourceManager.getScripting().runLaunched(obj);
+        }
+    }
+
+    public void runWaitFor(Object obj) {
+        if (obj == null)
+            return;
+        if (obj instanceof List) {
+            List<Pair<String, Object>> l = (List) obj;
+            for (Pair<String, Object> pair : l) {
+                beanLifecycle.addBeanListener(pair.key(), new BeanListener() {
+                    @Override
+                    public void initialized(Object bean) {
+                        if (pair.value() instanceof Closure) {
+                            Closure closure = (Closure) pair.value();
+                            closure.call(bean);
+                        } else {
+                            run(bean, pair.value());
+                        }
+                        beanLifecycle.removeBeanListener(this);
+                    }
+                });
+            }
+        } else if (obj instanceof Pair) {
+            Pair<String, Object> pair = (Pair) obj;
+            beanLifecycle.addBeanListener(pair.key(), new BeanListener() {
+                @Override
+                public void initialized(Object bean) {
+                    if (pair.value() instanceof Closure) {
+                        Closure closure = (Closure) pair.value();
+                        closure.call(bean);
+                    } else {
+                        run(bean, pair.value());
+                    }
+                    beanLifecycle.removeBeanListener(this);
+                }
+            });
+        }
     }
 
     @Override
@@ -497,7 +600,11 @@ public class Atom implements Map<String, Object> {
             return configuration;
         }
 
-        Object object = boundInstances.get(key);
+        Object object = overrideSettings.get(key);
+
+        if (object == null) {
+            object = boundInstances.get(key);
+        }
 
         // if null try resourceManager.getBean
         if (object == null) {
@@ -515,6 +622,15 @@ public class Atom implements Map<String, Object> {
 
         if (object == null) {
             object = resourceManager.getScripting().get(key.toString());
+        }
+
+        if (object == null) {
+            object = defaultSettings.get(key);
+        }
+
+        if (object == null
+                && !directives.containsKey(key)) {
+            logger.warn("variable {} not found", key);
         }
         return object;
     }
@@ -536,6 +652,68 @@ public class Atom implements Map<String, Object> {
         }
     }
 
+    Object putResourceProvider(String key, Class cls) {
+        Object instance = null;
+        try {
+            if (resourceManager.getBean(key) != null && !key.startsWith("_")) {
+                instance = resourceManager.getBean(key);
+                if (!cls.isAssignableFrom(instance.getClass())) {
+                    throw new IllegalArgumentException("key=" + key + " has already been registered with ResourceManager.");
+                }
+            } else {
+                instance = cls.getDeclaredConstructor().newInstance();
+                resourceManager.addResourceProvider((ResourceProvider) instance);
+                if (!key.startsWith("_")) {
+                    resourceManager.addBean(key, instance);
+                }
+            }
+        } catch (Exception e) {
+            throw logger.systemException(e);
+        }
+        return instance;
+    }
+
+    Object putClass(String key, Class cls) {
+        // creating an instance from Class
+        Object instance = null;
+        try {
+            if (resourceManager.getBean(key) != null && !key.startsWith("_")) {
+                instance = resourceManager.getBean(key);
+                if (!cls.isAssignableFrom(instance.getClass())) {
+                    throw new IllegalArgumentException("key=" + key + " has already been registered with ResourceManager.");
+                }
+            } else {
+                instance = cls.getDeclaredConstructor().newInstance();
+            }
+        } catch (InstantiationException | IllegalAccessException | NoSuchMethodException | InvocationTargetException e) {
+            throw logger.systemException(e);
+        }
+
+        registerBean(key, instance);
+
+        if (instance == null) {
+            throw new SystemException("Cannot instantiate " + cls);
+        }
+        resources.rebind(cls, instance);
+        return instance;
+    }
+
+    private Class loadClass(String className) {
+        Class cls = null;
+        try {
+            cls = getClass().getClassLoader().loadClass(className);
+        } catch (ClassNotFoundException ex) {
+            // OK, just testing if the string represent a
+        }
+        try {
+            if (cls == null && scriptLoader != null)
+                cls = scriptLoader.loadClass(className);
+        } catch (ClassNotFoundException ex) {
+            // OK, just testing if the string represent a
+        }
+        return cls;
+    }
+
     @Override
     @SuppressWarnings({"squid:S1141", "squid:S134", "squid:MethodCyclomaticComplexity"})
     public Object put(String key, Object value) {
@@ -545,6 +723,13 @@ public class Atom implements Map<String, Object> {
         try {
             if (value == null) {
                 throw new IllegalArgumentException("value for key=" + key + " is null!  This happens because you did not import the class.");
+            }
+
+            if (value instanceof String) {
+                String str = (String) value;
+                Class cls = loadClass(str);
+                if (cls != null)
+                    value = cls;
             }
 
             if (value instanceof Class) {
@@ -558,45 +743,10 @@ public class Atom implements Map<String, Object> {
                     }
                     duplicate = true;
                 } else if (ResourceProvider.class.isAssignableFrom((Class) value)) {
-                    Class cls = (Class) value;
-                    try {
-                        if (resourceManager.getBean(key) != null && !key.startsWith("_")) {
-                            instance = resourceManager.getBean(key);
-                            if (!cls.isAssignableFrom(instance.getClass())) {
-                                throw new IllegalArgumentException("key=" + key + " has already been registered with ResourceManager.");
-                            }
-                        } else {
-                            instance = cls.newInstance();
-                            resourceManager.addResourceProvider((ResourceProvider) instance);
-                            if (!key.startsWith("_")) {
-                                resourceManager.addBean(key, instance);
-                            }
-                        }
-                    } catch (Exception e) {
-                        throw logger.systemException(e);
-                    }
+                    instance = putResourceProvider(key, (Class) value);
                 } else {
                     // creating an instance from Class
-                    Class cls = (Class) value;
-                    try {
-                        if (resourceManager.getBean(key) != null && !key.startsWith("_")) {
-                            instance = resourceManager.getBean(key);
-                            if (!cls.isAssignableFrom(instance.getClass())) {
-                                throw new IllegalArgumentException("key=" + key + " has already been registered with ResourceManager.");
-                            }
-                        } else {
-                            instance = cls.newInstance();
-                        }
-                    } catch (InstantiationException | IllegalAccessException e) {
-                        throw logger.systemException(e);
-                    }
-
-                    registerBean(key, instance);
-
-                    if (instance == null) {
-                        throw new SystemException("Cannot instantiate " + value);
-                    }
-                    resources.rebind(cls, instance);
+                    instance = putClass(key, (Class) value);
                 }
                 configure(instance, key);
             } else if (value instanceof ResourceProvider) {
@@ -626,7 +776,7 @@ public class Atom implements Map<String, Object> {
                     instance = value;
                 }
             } else {
-                if (!resourceManager.getScripting().isRunnable(value)) {
+                if (!resourceManager.getScripting().isRunnable(value)) { // value is not a closure
                     instance = resources.rebind((Class) value.getClass(), value);
                     registerBean(key, instance);
                     configure(instance, key);
@@ -666,8 +816,7 @@ public class Atom implements Map<String, Object> {
             // no logging as it is done by the nested script.
             throw th;
         } catch (Exception th) {
-            logger.error("Component name=" + getName() + " has issues", th);
-            throw new SystemException(th);
+            throw new SystemException("Component name=" + getName() + " has issues", th);
         }
 
         return instance;
@@ -734,19 +883,22 @@ public class Atom implements Map<String, Object> {
     }
 
     class MyBeanListener extends GroovyObjectSupport {
-
         // name is the name of the bean
         @Override
         public Object invokeMethod(String name, Object args) {
+            Object existing = boundInstances.get(WAIT_FOR);
+            List<Pair> list;
+            if (existing instanceof List) {
+                list = (List<Pair>) existing;
+            } else {
+                list = new LinkedList<>();
+                boundInstances.put(WAIT_FOR, list);
+            }
             Object[] arguments = (Object[]) args;
-            Closure closure = (Closure) arguments[0];
-            beanLifecycle.addBeanListener(name, new BeanListener() {
-                @Override
-                public void initialized(Object bean) {
-                    closure.call(bean);
-                    beanLifecycle.removeBeanListener(this);
-                }
-            });
+            Object value = arguments.length > 0 ? arguments[0] : null;
+            if (value instanceof Closure) {
+                list.add(new Pair(name, value));
+            }
 
             return null;
         }

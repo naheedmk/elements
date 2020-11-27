@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ public class VaultImpl implements Vault, Serializable, Cloneable {
 
     private String name;
     private transient VersionComparator comparator = new VersionComparator();
+    private boolean modified;
 
     public String getName() {
         return name;
@@ -37,6 +38,14 @@ public class VaultImpl implements Vault, Serializable, Cloneable {
 
     public void setName(String name) {
         this.name = name;
+    }
+
+    public boolean isModified() {
+        return modified;
+    }
+
+    public void setModified(boolean modified) {
+        this.modified = modified;
     }
 
     public Secret getSecret(String alias, String version) {
@@ -48,22 +57,19 @@ public class VaultImpl implements Vault, Serializable, Cloneable {
         if (version == null) {
             secret = versions.get(versions.lastKey());
         } else {
-            secret = versions.get(new Long(version));
+            secret = versions.get(Long.parseLong(version));
         }
         return secret;
     }
 
     public void addSecret(Secret secret) {
         String alias = secret.alias();
-        SortedMap<Long, Secret> versions = secrets.get(alias);
-        if (versions == null) {
-            versions = new TreeMap<>(comparator);
-            secrets.put(alias, versions);
-        }
+        SortedMap<Long, Secret> versions  = secrets.computeIfAbsent(alias, key -> new TreeMap<>(comparator));
         String version = secret.version();
         if (version == null)
             version = "0";
-        versions.put(new Long(version), secret);
+        versions.put(Long.parseLong(version), secret);
+        modified = true;
     }
 
     public void removeSecret(String alias, String version) {
@@ -71,10 +77,13 @@ public class VaultImpl implements Vault, Serializable, Cloneable {
         if (versions == null) {
             return;
         }
+
         if (version == null) {
-            secrets.remove(alias);
+            if (secrets.remove(alias) != null)
+                modified = true;
         } else {
-            versions.remove(new Long(version));
+            if (versions.remove(Long.parseLong(version)) != null)
+                modified = true;
         }
     }
 

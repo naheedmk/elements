@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -67,6 +67,7 @@ public class TimedLogger {
     /**
      * Constructs a TimedLogger using the default logger named TimedLogger
      */
+    @SuppressWarnings("squid:S4165")
     public TimedLogger() {
         logger = Logger.getLogger("TimedLogger");
 
@@ -189,7 +190,7 @@ public class TimedLogger {
         return _log(message, 0);
     }
 
-    @SuppressWarnings({"squid:S0010", "squid:S00100"})
+    @SuppressWarnings({"squid:S0010", "squid:S00100", "squid:S2629"})
     private TimedLogger _log(String message, long timeout) {
         long duration = System.currentTimeMillis() - start;
         start = System.currentTimeMillis();
@@ -244,8 +245,8 @@ public class TimedLogger {
 
         int i;
         for (i = 0; i < trace.length; i++) {
-            if (thisClassName.equals(trace[i].getClassName())) ;
-            break;
+            if (thisClassName.equals(trace[i].getClassName()))
+                break;
         }
         if (trace.length > i + 3) {
             builder.append(trace[i + 3].getClassName());

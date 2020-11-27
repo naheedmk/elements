@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -135,7 +135,7 @@ public class Terminal implements Closeable {
         @Override
         @SuppressWarnings("squid:S1168")
         public char[] readPassword(String text) {
-            output.println(text);
+            output.print(text);
             output.flush();
             String str = null;
             try {

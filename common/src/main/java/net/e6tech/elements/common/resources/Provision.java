@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,25 +17,65 @@ limitations under the License.
 package net.e6tech.elements.common.resources;
 
 import net.e6tech.elements.common.inject.Inject;
+import net.e6tech.elements.common.logging.LogLevel;
 import net.e6tech.elements.common.logging.Logger;
 import net.e6tech.elements.common.reflection.ObjectConverter;
-import net.e6tech.elements.common.resources.plugin.PluginPath;
 import net.e6tech.elements.common.resources.plugin.Plugin;
 import net.e6tech.elements.common.resources.plugin.PluginManager;
+import net.e6tech.elements.common.resources.plugin.PluginPath;
 import net.e6tech.elements.common.util.SystemException;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.util.*;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Properties;
 import java.util.function.Consumer;
 
 /**
  * Created by futeh.
  */
+@SuppressWarnings({"squid:S1444", "squid:ClassVariableVisibilityCheck"})
 public class Provision {
 
-    @Inject
+    public static final int JVM_VERSION;
+    public static Integer cacheBuilderConcurrencyLevel = 32;
+
     private ResourceManager resourceManager;
+    private boolean suppressLogging = false;
+
+    public void suppressLogging() {
+        suppressLogging = true;
+    }
+
+    public void suppressLogging(Runnable runnable) {
+        try {
+            suppressLogging = true;
+            runnable.run();
+        } finally {
+            resumeLogging();
+        }
+    }
+
+    public void resumeLogging() {
+        suppressLogging = false;
+    }
+
+    public boolean isSuppressLogging() {
+        return suppressLogging;
+    }
+
+    static {
+        String version = System.getProperty("java.version");
+        int firstIdx = version.indexOf('.');
+        int verNumber = Integer.parseInt(version.substring(0, version.indexOf('.')));
+        if (verNumber == 1) {
+            int secondIdx = version.indexOf('.', firstIdx + 1);
+            verNumber = Integer.parseInt(version.substring(firstIdx + 1, secondIdx));
+        }
+        JVM_VERSION = verNumber;
+    }
 
     public Provision load(Map<String, Object> map) {
         Class cls = getClass();
@@ -67,12 +107,29 @@ public class Provision {
         }
     }
 
-    public void log(Logger logger, String message, Throwable th) {
-        logger.warn(message, th);
+    public void log(Logger logger, LogLevel level, String message, Throwable thIn) {
+        if (suppressLogging)
+            return;
+        Throwable th = thIn;
+        while (th instanceof RuntimeException) {
+            if (th.getCause() == null || th == th.getCause())
+                break;
+            th = th.getCause();
+        }
+        doLog(logger, level, message, th);
+    }
+
+    protected void doLog(Logger logger, LogLevel level, String message, Throwable th) {
+        logger.log(level, message, th);
     }
 
     public ResourceManager getResourceManager() {
         return resourceManager;
+    }
+
+    @Inject
+    public void setResourceManager(ResourceManager resourceManager) {
+        this.resourceManager = resourceManager;
     }
 
     public <T> T getComponentResource(String componentName, String resourceName) {
@@ -83,7 +140,11 @@ public class Provision {
         return resourceManager.getName();
     }
 
-    public <T> T  getVariable(String key) {
+    public <T> T nullableVar(String key) {
+        return resourceManager.nullableVar(key);
+    }
+
+    public <T> Optional<T> getVariable(String key) {
         return resourceManager.getVariable(key);
     }
 
@@ -123,8 +184,17 @@ public class Provision {
         return resourceManager.newInstance(cls);
     }
 
+    public <T> Optional<T> findInstance(Class<T> cls) {
+        T t = resourceManager.getInstance(cls);
+        return Optional.ofNullable(t);
+    }
+
     public <T> T inject(T obj) {
         return resourceManager.inject(obj);
+    }
+
+    public ClassLoader getPluginClassLoader() {
+        return resourceManager.getPluginClassLoader();
     }
 
     public Class<? extends Resources> getResourcesClass() {

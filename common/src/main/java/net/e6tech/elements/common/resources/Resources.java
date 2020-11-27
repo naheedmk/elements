@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package net.e6tech.elements.common.resources;
 
 import net.e6tech.elements.common.inject.Inject;
 import net.e6tech.elements.common.inject.Module;
+import net.e6tech.elements.common.logging.LogLevel;
 import net.e6tech.elements.common.logging.Logger;
 import net.e6tech.elements.common.reflection.Reflection;
 import net.e6tech.elements.common.resources.plugin.Plugin;
@@ -25,8 +26,13 @@ import net.e6tech.elements.common.resources.plugin.PluginPath;
 import net.e6tech.elements.common.resources.plugin.PluginPaths;
 import net.e6tech.elements.common.util.ExceptionMapper;
 import net.e6tech.elements.common.util.SystemException;
+import net.e6tech.elements.common.util.function.ConsumerWithException;
+import net.e6tech.elements.common.util.function.FunctionWithException;
 
+import java.beans.BeanInfo;
+import java.beans.PropertyDescriptor;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.util.*;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
@@ -44,30 +50,90 @@ import java.util.function.Supplier;
  * Created by futeh.
  */
 @BindClass(Resources.class)
-@SuppressWarnings({"squid:S1141", "squid:S134", "squid:S1602", "squid:S00100", "squid:MethodCyclomaticComplexity"})
+@SuppressWarnings({"unchecked", "squid:S1141", "squid:S134", "squid:S1602", "squid:S00100", "squid:MethodCyclomaticComplexity"})
 public class Resources implements AutoCloseable, ResourcePool {
 
+    private static ThreadLocal<Deque<Resources>> activeResources = new ThreadLocal<>();
+
     private static Logger logger = Logger.getLogger(Resources.class);
-    private static final List<ResourceProvider> emptyResourceProviders = Collections.unmodifiableList(new ArrayList<>());
     private static final String ABORT_DUE_TO_EXCEPTION = "Aborting due to exception";
-
     private ResourceManager resourceManager;
-
-    @Inject(optional = true)
     private Retry retry;
-
     protected ResourcesState state;
     protected Configurator configurator = new Configurator();
-    private List<ResourceProvider> externalResourceProviders;
+    private Configurator initialConfigurator;
     private Consumer<? extends Resources> preOpen;
-    private List<Replay<? extends Resources, ?>> replays = new LinkedList<>();
-    Object lastResult;
-    boolean submitting = false;
+    private List<Replay<? extends Resources, ?, ? extends Exception>> replays = new LinkedList<>();
+    private Object lastResult;
+    private Throwable lastException;
+    private boolean submitting = false;
+
+    public static Resources parent(Resources current) {
+        Deque<Resources> deque = activeResources.get();
+        if (deque == null)
+            return null;
+        Iterator<Resources> iterator = deque.iterator();
+        while (iterator.hasNext()) {
+            Resources r = iterator.next();
+            if (r == current) {
+                return (iterator.hasNext()) ? iterator.next() : null;
+            }
+        }
+        return null;
+    }
+
+    public static Iterator<Resources> parents(Resources current) {
+        Deque<Resources> deque = activeResources.get();
+        if (deque == null)
+            return null;
+        Iterator<Resources> iterator = deque.iterator();
+        while (iterator.hasNext()) {
+            Resources r = iterator.next();
+            if (r == current) {
+                return iterator;
+            }
+        }
+        return Collections.emptyIterator();
+    }
 
     protected Resources(ResourceManager resourceManager) {
         this.resourceManager = resourceManager;
         state = new ResourcesState(this);
         getModule().bindInstance(getClass(), this);
+    }
+
+    public <T> T nullableVar(String key) {
+        Optional<T> optional = state.getVariable(key);
+        return optional.orElseGet(() -> resourceManager.nullableVar(key));
+    }
+
+    public <T> Optional<T> getVariable(String key) {
+        Optional<T> optional = state.getVariable(key);
+        if (optional.isPresent())
+            return optional;
+        return resourceManager.getVariable(key);
+    }
+
+    public Resources setVariable(String key, Object val) {
+        state.setVariable(key, val);
+        return this;
+    }
+
+    public <T> Map<String, T> getMapVariable(Class<T> key) {
+        return state.computeMapIfAbsent(key);
+    }
+
+    public <T> T getMapVariable(Class<T> key, String name) {
+        return state.computeMapIfAbsent(key).get(name);
+    }
+
+    public Retry getRetry() {
+        return retry;
+    }
+
+    @Inject(optional = true)
+    public void setRetry(Retry retry) {
+        this.retry = retry;
     }
 
     void setPreOpen(Consumer<? extends Resources> preOpen) {
@@ -95,20 +161,18 @@ public class Resources implements AutoCloseable, ResourcePool {
     }
 
     List<ResourceProvider> getExternalResourceProviders() {
-        if (externalResourceProviders == null)
-            return emptyResourceProviders;
-        return externalResourceProviders;
+        return state.getExternalResourceProviders();
     }
 
     void setExternalResourceProviders(List<ResourceProvider> externalResourceProviders) {
-        this.externalResourceProviders = externalResourceProviders;
+        state.setExternalResourceProviders(externalResourceProviders);
     }
 
     private List<ResourceProvider> getResourceProviders() {
         return state.getResourceProviders();
     }
 
-    public synchronized void addResourceProvider(ResourceProvider resourceProvider) {
+    public synchronized Resources addResourceProvider(ResourceProvider resourceProvider) {
         getResourceProviders().add(resourceProvider);
         if (isOpen()) {
             resourceProvider.onOpen(this);
@@ -125,51 +189,86 @@ public class Resources implements AutoCloseable, ResourcePool {
         if (isAborted()) {
             resourceProvider.onAbort(this);
         }
+
+        return this;
     }
 
-    public void onCommit(OnCommit onCommit) {
+    public synchronized Resources onCommit(OnCommit onCommit) {
         addResourceProvider(onCommit);
+        return this;
     }
 
-    public void onCommit(Runnable runnable) {
+    public synchronized Resources onCommit(Runnable runnable) {
         OnCommit on = res -> runnable.run();
         onCommit(on);
+        return this;
     }
 
-    public void afterCommit(AfterCommit afterCommit) {
+    public synchronized Resources afterCommit(AfterCommit afterCommit) {
         addResourceProvider(afterCommit);
+        return this;
     }
 
-    public void afterCommit(Runnable runnable) {
+    public synchronized Resources afterCommit(Runnable runnable) {
         AfterCommit after = res -> runnable.run();
         afterCommit(after);
+        return this;
     }
 
-    public synchronized void onOpen(OnOpen onOpen) {
+    public synchronized Resources onCommitOrAbort(Runnable runnable) {
+        onCommit(runnable);
+        onAbort(runnable);
+        return this;
+    }
+
+    public synchronized Resources onOpen(OnOpen onOpen) {
         addResourceProvider(onOpen);
+        return this;
     }
 
-    public synchronized void onOpen(Runnable runnable) {
+    public synchronized Resources onOpen(Runnable runnable) {
         OnOpen on = res -> runnable.run();
         onOpen(on);
+        return this;
     }
 
-    public synchronized void onAbort(OnAbort onAbort) {
+    public synchronized Resources onAbort(OnAbort onAbort) {
         addResourceProvider(onAbort);
+        return this;
     }
 
-    public synchronized void onAbort(Runnable runnable) {
+    public synchronized Resources onAbort(Runnable runnable) {
         OnAbort on = res -> runnable.run();
         onAbort(on);
+        return this;
     }
 
-    public synchronized void onClosed(OnClosed onClosed) {
+    public synchronized Resources afterAbort(AfterAbort afterAbort) {
+        addResourceProvider(afterAbort);
+        return this;
+    }
+
+    public synchronized Resources afterAbort(Runnable runnable) {
+        AfterAbort after = res -> runnable.run();
+        afterAbort(after);
+        return this;
+    }
+
+    public synchronized Resources afterCommitOrAbort(Runnable runnable) {
+        afterCommit(runnable);
+        afterAbort(runnable);
+        return this;
+    }
+
+    public synchronized Resources onClosed(OnClosed onClosed) {
         addResourceProvider(onClosed);
+        return this;
     }
 
-    public synchronized void onClosed(Runnable runnable) {
+    public synchronized Resources onClosed(Runnable runnable) {
         OnClosed on = res -> runnable.run();
         onClosed(on);
+        return this;
     }
 
     public synchronized boolean remove(ResourceProvider provider) {
@@ -178,6 +277,10 @@ public class Resources implements AutoCloseable, ResourcePool {
 
     public ResourceManager getResourceManager() {
         return resourceManager;
+    }
+
+    public PluginManager getPluginManager() {
+        return getResourceManager().getPluginManager().from(this);
     }
 
     /*
@@ -204,20 +307,35 @@ public class Resources implements AutoCloseable, ResourcePool {
         return plugin.from(this).get(paths, args);
     }
 
-    public <T> T getVariable(String variable) {
-        return resourceManager.getVariable(variable);
-    }
-
     public Module getModule() {
         return state.getModule();
     }
 
-    public void addModule(Module module) {
+    public Resources addModule(Module module) {
         state.addModule(module);
+        return this;
     }
 
-    public <T> Binding<T> getBinding(Class<T> cls) {
-        return  new Binding<>(this, cls);
+    <T> Binding<T> getBinding(Class<T> cls) {
+        return new Binding<>(this, cls);
+    }
+
+    public <E extends Exception> void briefly(ConsumerWithException<Bindings, E> consumer) throws E {
+        Bindings bindings = new Bindings(this);
+        try {
+            consumer.accept(bindings);
+        } finally {
+            bindings.restore();
+        }
+    }
+
+    public <T, E extends Exception> T briefly(FunctionWithException<Bindings, T, E> function) throws E {
+        Bindings bindings = new Bindings(this);
+        try {
+            return function.apply(bindings);
+        } finally {
+            bindings.restore();
+        }
     }
 
     public <T> T tryBind(Class<T> cls, Callable<T> callable) {
@@ -225,7 +343,7 @@ public class Resources implements AutoCloseable, ResourcePool {
     }
 
     public <T> boolean isBound(Class<T> cls) {
-        return (getModule().getBoundInstance(cls) != null) ? true : false;
+        return getModule().getBoundInstance(cls) != null;
     }
 
     public <T> T bind(Class<T> cls, T resource) {
@@ -259,14 +377,14 @@ public class Resources implements AutoCloseable, ResourcePool {
     }
 
     public <T> T getNamedInstance(Class<T> cls, String name) {
-        return getModule().getBoundNamedInstance(cls, name);
+        return state.getNamedInstance(this, cls, name);
     }
-
 
     public <T> T inject(T object) {
         return inject(object, new HashSet<>());
     }
 
+    @SuppressWarnings("squid:S3776")
     private <T> T inject(T object, Set<Integer> seen) {
         if (object == null)
             return null;
@@ -300,6 +418,20 @@ public class Resources implements AutoCloseable, ResourcePool {
                     }
                     cls = cls.getSuperclass();
                 }
+
+                BeanInfo beanInfo = Reflection.getBeanInfo(object.getClass());
+                for (PropertyDescriptor prop : beanInfo.getPropertyDescriptors()) {
+                    if (prop.getReadMethod() != null) {
+                        boolean hasAnnotation = prop.getPropertyType().getAnnotation(Injectable.class) != null;
+                        if (!hasAnnotation)
+                            hasAnnotation = prop.getReadMethod() != null && prop.getReadMethod().getAnnotation(Injectable.class) != null;
+                        if (!hasAnnotation)
+                            hasAnnotation = prop.getWriteMethod() != null && prop.getWriteMethod().getAnnotation(Injectable.class) != null;
+
+                        if (hasAnnotation)
+                            info.addInjectableProperty(prop);
+                    }
+                }
             }
             resourceManager.getInjections().put(object.getClass(), info);
         }
@@ -311,6 +443,17 @@ public class Resources implements AutoCloseable, ResourcePool {
                     inject(injectField, seen);
                 }
             } catch (IllegalAccessException e) {
+                throw new SystemException(e);
+            }
+        }
+
+        for (PropertyDescriptor d : info.getInjectableProperties()) {
+            try {
+                Object injectProp = d.getReadMethod().invoke(object);
+                if (injectProp != null) {
+                    inject(injectProp, seen);
+                }
+            } catch (IllegalAccessException | InvocationTargetException e) {
                 throw new SystemException(e);
             }
         }
@@ -338,30 +481,62 @@ public class Resources implements AutoCloseable, ResourcePool {
         return configurator;
     }
 
-    public void configure(Configurator configurator) {
+    // configurator can be changed by preOpen
+    // whereas initialConfigurator records the initial configuration values when Resources is open
+    // It is then used in replay.
+    public Resources configure(Configurator configurator) {
         this.configurator.putAll(configurator);
+        if (this.initialConfigurator == null) {
+            this.initialConfigurator = new Configurator();
+        }
+        this.initialConfigurator.putAll(configurator);
+        return this;
     }
 
-    public synchronized void onOpen() {
+    public synchronized Resources onOpen() {
         // state.initModules(this); // MUST initialize injector first by calling initModules
         if (!isOpen()) {
             state.setState(ResourcesState.State.OPEN);
-            // this loop can produce recursive onOpen call
             try {
-                for (ResourceProvider resourceProvider : state.getResourceProviders()) {
-                    resourceProvider.onOpen(this);
+                // this loop can produce recursive onOpen call
+                // so below is a special treatment
+                List<ResourceProvider> list = state.getResourceProviders();
+                List<ResourceProvider> originalList = list;
+                while (!list.isEmpty()) {
+                    List<ResourceProvider> additionalResourceProviders = new ArrayList<>();
+                    state.setResourceProviders(additionalResourceProviders);
+                    for (ResourceProvider resourceProvider : list) {
+                        resourceProvider.onOpen(this);
+                    }
+                    // because onOpen can create more onOpen
+                    originalList.addAll(additionalResourceProviders);
+
+                    // set list to additional added providers and go throught the loop again
+                    list = additionalResourceProviders;
                 }
+                state.setResourceProviders(originalList);
+
+                state.onOpen(this);
+
+                for (ResourceProvider p : getExternalResourceProviders()) {
+                    p.afterOpen(this);
+                }
+
+                for (ResourceProvider resourceProvider : state.getResourceProviders()) {
+                    resourceProvider.afterOpen(this);
+                }
+
             } catch (Exception ex) {
                 abort();
                 throw ex;
             }
-            state.onOpen(this);
         }
+        return this;
     }
 
-    protected <T extends Resources, R> R replay(Exception th, Replay<T, R> replay) {
+    protected <T extends Resources, R, E extends Exception> R replay(Exception th, Replay<T, R, E> replay) {
         if (isAborted() || retry == null) {
-            log(ABORT_DUE_TO_EXCEPTION, th);
+            log(LogLevel.WARN, ABORT_DUE_TO_EXCEPTION, th);
             if (!isAborted())
                 abort();
             if (th instanceof RuntimeException)
@@ -376,16 +551,16 @@ public class Resources implements AutoCloseable, ResourcePool {
                         .append(", message: ")
                         .append(th.getMessage());
                 Reflection.printStackTrace(builder, "    ", 2, 8);
-                logger.warn(builder.toString());
+                log(LogLevel.WARN, builder.toString(), null);
 
                 try { abort(); } catch (Exception th2) { Logger.suppress(th2); }
 
-                T retryResources = (T) resourceManager.open(null, preOpen);
+                T retryResources = (T) resourceManager.open(initialConfigurator, preOpen);
                 // copy retryResources to this.  retryResources is not used.  We only need to create a new ResourcesState.
                 state = retryResources.state;
-                Iterator<Replay<? extends Resources, ?>> iterator = replays.iterator();
+                Iterator<Replay<? extends Resources, ?, ? extends Exception>> iterator = replays.iterator();
                 while (iterator.hasNext()) {
-                    Object ret = ((Replay<T, ?>) iterator.next()).replay((T) this);
+                    Object ret = ((Replay<T, R, E>) iterator.next()).replay((T) this);
                     if (!iterator.hasNext()) {
                         lastResult = ret;
                     }
@@ -393,11 +568,13 @@ public class Resources implements AutoCloseable, ResourcePool {
                 return replay.replay((T) this);
             });
         } catch (RuntimeException th2) {
-            log(ABORT_DUE_TO_EXCEPTION, th2);
+            lastException = th2;
+            log(LogLevel.WARN, ABORT_DUE_TO_EXCEPTION, th2);
             abort();
             throw th2;
         } catch (Throwable th2) {
-            log(ABORT_DUE_TO_EXCEPTION, th2);
+            lastException = th2;
+            log(LogLevel.WARN, ABORT_DUE_TO_EXCEPTION, th2);
             abort();
             throw new SystemException(th2);
         }
@@ -405,22 +582,35 @@ public class Resources implements AutoCloseable, ResourcePool {
 
     // return null because we want this type of work to be stateless outside of
     // Resources.
-    public synchronized <R extends Resources> void submit(Transactional.ConsumerWithException<R> work) {
-        play(new Replay<R, Object>(work));
+    public synchronized <R extends Resources, E extends Exception> void submit(ConsumerWithException<R, E> work) {
+        play(new Replay<R, Object, E>(work));
     }
 
-    public synchronized <T extends Resources, R> R submit(Transactional.FunctionWithException<T, R> work) {
-        return play(new Replay<T, R>(work));
+    public synchronized <T extends Resources, R, E extends Exception> R submit(FunctionWithException<T, R, E> work) {
+        return play(new Replay<>(work));
     }
 
-    private <T extends Resources, R> R play(Replay<T, R> replay) {
+    public Throwable getLastException() {
+        return lastException;
+    }
+
+    private <T extends Resources, R, E extends Exception> R play(Replay<T, R, E> replay) {
         R ret = null;
         boolean topLevel = !submitting;
         submitting = true;
+        Deque<Resources> deque = activeResources.get();
+
         try {
+            if (deque == null) {
+                deque = new LinkedList<>();
+                activeResources.set(deque);
+            }
+            deque.push(this);
+
             try {
                 ret = replay.replay((T) this);
             } catch (Exception th) {
+                lastException = th;
                 ret = replay(th, replay);
             }
             lastResult = ret;
@@ -431,13 +621,17 @@ public class Resources implements AutoCloseable, ResourcePool {
                 if (!isAborted())
                     replays.add(replay);
             }
+
+            deque.remove(this);
+            if (deque.isEmpty())
+                activeResources.remove();
         }
         return ret;
     }
 
-    private void log(String msg, Throwable th) {
+    private void log(LogLevel level, String msg, Throwable th) {
         Provision provision = resourceManager.getInstance(Provision.class);
-        provision.log(logger, msg, th);
+        provision.log(logger, level, msg, th);
     }
 
     public synchronized <R> R commit() {
@@ -445,7 +639,7 @@ public class Resources implements AutoCloseable, ResourcePool {
         try {
             ret = _commit();
         } catch (Exception th) {
-            ret = replay(th, new Replay<Resources, R>(res -> {return _commit();}));
+            ret = replay(th, new Replay<Resources, R, Exception>(res -> {return _commit();}));
         } finally {
             if (isCommitted()) {
                 // commit successful
@@ -493,10 +687,11 @@ public class Resources implements AutoCloseable, ResourcePool {
         return ret;
     }
 
-    public synchronized void abort() {
+    @SuppressWarnings("squid:S3776")
+    public synchronized Resources abort() {
         try {
             if (resourceManager == null)
-                return;
+                return this;
 
             if (!isAborted()) {
                 for (int i = 0; i < state.getResourceProviders().size(); i++) {
@@ -507,6 +702,7 @@ public class Resources implements AutoCloseable, ResourcePool {
                         Logger.suppress(th);
                     }
                 }
+
                 for (ResourceProvider p : getExternalResourceProviders()) {
                     try {
                         p.onAbort(this);
@@ -514,11 +710,25 @@ public class Resources implements AutoCloseable, ResourcePool {
                         Logger.suppress(th);
                     }
                 }
+
+                state.setState(ResourcesState.State.ABORTED);
+                for (int i = 0; i < state.getResourceProviders().size(); i++) {
+                    ResourceProvider resourceProvider = state.getResourceProviders().get(i);
+                    try {
+                        resourceProvider.afterAbort(this);
+                    } catch (Exception th) {
+                        Logger.suppress(th);
+                    }
+                }
             }
         } finally {
-            cleanup();
+            // set set state to abort so that the state is aborted during onClose
+            state.setState(ResourcesState.State.ABORTED);
+            cleanup();  // this will reset state to Initial
+            // and we have to set it to ABORTED again.
             state.setState(ResourcesState.State.ABORTED);
         }
+        return this;
     }
 
     public void close() throws Exception {
@@ -532,7 +742,7 @@ public class Resources implements AutoCloseable, ResourcePool {
         }
     }
 
-    protected void cleanup() {
+    public void cleanup() {
         try {
             for (ResourceProvider resourceProvider : state.getResourceProviders()) {
                 resourceProvider.onClosed(this);
@@ -541,11 +751,10 @@ public class Resources implements AutoCloseable, ResourcePool {
                 p.onClosed(this);
             }
         } catch (Exception ex) {
-            logger.trace(ex.getMessage(), ex);
+            log(LogLevel.TRACE, ex.getMessage(), ex);
         }
         state.cleanup();
         configurator.clear();
-        externalResourceProviders = null;
         replays.clear();  // cannot be set to null because during replay abort may be called.
         lastResult = null;
         submitting = false;
@@ -556,20 +765,20 @@ public class Resources implements AutoCloseable, ResourcePool {
         return (T) getInstance(Provision.class);
     }
 
-    private static class Replay<T, R> {
+    private static class Replay<T, R, E extends Exception> {
 
-        Transactional.ConsumerWithException<T> consumer;
-        Transactional.FunctionWithException<T, R> function;
+        ConsumerWithException<T, E> consumer;
+        FunctionWithException<T, R, E> function;
 
-        Replay(Transactional.ConsumerWithException<T> work) {
+        Replay(ConsumerWithException<T, E> work) {
             consumer = work;
         }
 
-        Replay(Transactional.FunctionWithException<T, R> work) {
+        Replay(FunctionWithException<T, R, E> work) {
             function = work;
         }
 
-        R replay(T res) throws Exception {
+        R replay(T res) throws E {
             if (consumer != null) {
                 consumer.accept(res);
                 return null;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -73,6 +73,7 @@ public class MultiProxy {
         return this;
     }
 
+    @SuppressWarnings("unchecked")
     public <T> T createInstance(Object target) {
         Class[] interfaces = target.getClass().getInterfaces();
         boolean found = false;
@@ -100,7 +101,7 @@ public class MultiProxy {
         }
 
         @Override
-        @SuppressWarnings({"squid:S134", "squid:MethodCyclomaticComplexity"})
+        @SuppressWarnings({"unchecked", "squid:S134", "squid:MethodCyclomaticComplexity", "squid:S3776"})
         public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
             Object ret = null;
 
@@ -108,13 +109,17 @@ public class MultiProxy {
             InvocationHandler handler = null;
 
             for (Class intf : interfaces) {
-                if (intf.getMethod(method.getName(), method.getParameterTypes()) != null) {
-                    Map<String, InvocationHandler> methods = handlers.get(intf);
-                    if (methods != null) {
-                        handler = methods.get(method.getName());
-                        if (handler != null)
-                            break;
+                try {
+                    if (intf.getMethod(method.getName(), method.getParameterTypes()) != null) {
+                        Map<String, InvocationHandler> methods = handlers.get(intf);
+                        if (methods != null) {
+                            handler = methods.get(method.getName());
+                            if (handler != null)
+                                break;
+                        }
                     }
+                } catch (NoSuchMethodException ex) {
+                    // ignore
                 }
             }
             if (handler == null) {

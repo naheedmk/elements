@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ package net.e6tech.elements.common.util.monitor;
  *
  * IMPORTANT: implementer must not hold on to any references.
  */
-@FunctionalInterface
 public interface AllocationListener {
+    void onDeallocated();
     void onPotentialLeak();
 }

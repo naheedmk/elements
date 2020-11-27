@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -14,32 +14,34 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 dependencies {
-    compile 'org.yaml:snakeyaml:1.18'
-    compile 'simple-jndi:simple-jndi:0.11.4.1'
-    compile 'com.google.code.findbugs:jsr305:3.0.2'
-    compile 'org.apache.logging.log4j:log4j-api:2.8.2'
-    compile 'org.apache.logging.log4j:log4j-core:2.8.2'
-    compile 'org.apache.logging.log4j:log4j-slf4j-impl:2.8.2'
-    compile 'org.apache.logging.log4j:log4j-jul:2.8.2'
-    compile 'org.slf4j:slf4j-api:1.7.25'
-    compile 'org.codehaus.groovy:groovy-all:2.4.12:indy'
-    compile 'com.google.guava:guava:19.0'
-    compile 'javax.inject:javax.inject:1'
-    compile 'com.fasterxml.jackson.core:jackson-core:2.8.9'
-    compile 'com.fasterxml.jackson.core:jackson-annotations:2.8.9'
-    compile 'com.fasterxml.jackson.core:jackson-databind:2.8.9'
-    compile 'com.fasterxml.jackson.module:jackson-module-jaxb-annotations:2.8.9'
-    compile 'com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:2.8.9'
-    // compile 'org.javassist:javassist:3.22.0-CR1'
-    compile 'net.bytebuddy:byte-buddy:1.7.1'
-    // compile 'org.ow2.asm:asm:5.2'
-    compile 'org.ehcache:ehcache:3.4.0'
-    compile 'javax.cache:cache-api:1.0.0'
+    compile "org.yaml:snakeyaml:${snakeyamlVersion}"
+    compile "simple-jndi:simple-jndi:${simplejndiVersion}"
+    compile "com.google.code.findbugs:jsr305:${findbugsVersion}"
+    compile "org.apache.logging.log4j:log4j-api:${log4jVersion}"
+    compile "org.apache.logging.log4j:log4j-core:${log4jVersion}"
+    compile group: 'org.apache.logging.log4j', name: 'log4j-web', version: "${log4jVersion}"
+    compile "org.slf4j:slf4j-api:${slf4jVersion}"
+    compile ("org.apache.logging.log4j:log4j-slf4j-impl:${log4jVersion}")
+    compile "org.apache.logging.log4j:log4j-jul:${log4jVersion}"
+    compile "com.lmax:disruptor:${lmaxDisruptorVerions}"
+    compile ("org.codehaus.groovy:groovy:${groovyVersion}:indy")
+    compile ("org.codehaus.groovy:groovy-json:${groovyVersion}:indy")
+    compile "com.google.guava:guava:${guavaVerions}"
+    compile "javax.inject:javax.inject:1"
+    compile "com.fasterxml.jackson.core:jackson-core:${jacksonVersion}"
+    compile "com.fasterxml.jackson.core:jackson-annotations:${jacksonVersion}"
+    compile "com.fasterxml.jackson.core:jackson-databind:${jacksonVersion}"
+    compile "com.fasterxml.jackson.module:jackson-module-jaxb-annotations:${jacksonVersion}"
+    compile "com.fasterxml.jackson.dataformat:jackson-dataformat-yaml:${jacksonVersion}"
+    compile "net.bytebuddy:byte-buddy:${bytebuddyVersion}"
+    compile group: 'org.glassfish.jaxb', name: 'jaxb-runtime', version: "${jaxbRuntime}"
+    compile ("org.ehcache:ehcache:${ehcacheVersion}")
+    compile "javax.cache:cache-api:${javaCacheApiVerison}"
+    compile ("com.typesafe.akka:akka-actor-typed_${akkaScalaVersion}:${akkaVersion}")
+    compile group: 'com.typesafe.akka', name: "akka-actor_${akkaScalaVersion}", version: "${akkaVersion}"
 
-    // akka core
-    compile group: 'com.typesafe.akka', name: 'akka-actor_2.12', version: '2.5.3'
-
-    testCompile("org.junit.jupiter:junit-jupiter-api:5.0.0-M4")
-    testCompile("org.junit.platform:junit-platform-launcher:1.0.0-M4")
-    testRuntime("org.junit.jupiter:junit-jupiter-engine:5.0.0-M4")
+    testCompile "org.junit.jupiter:junit-jupiter-api:${junitJupiterVersion}"
+    testCompile "org.junit.jupiter:junit-jupiter-params:${junitJupiterVersion}"
+    testCompile "org.junit.platform:junit-platform-launcher:${junitPlatformLauncherVersion}"
+    testRuntime "org.junit.jupiter:junit-jupiter-engine:${junitJupiterVersion}"
 }

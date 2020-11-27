@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,29 +17,30 @@ limitations under the License.
 package net.e6tech.elements.network.restful;
 
 import com.fasterxml.jackson.databind.type.CollectionType;
+import com.fasterxml.jackson.databind.type.MapType;
 import com.fasterxml.jackson.databind.type.TypeFactory;
+import net.e6tech.elements.common.interceptor.CallFrame;
 import net.e6tech.elements.common.interceptor.Interceptor;
 import net.e6tech.elements.common.interceptor.InterceptorHandler;
 import net.e6tech.elements.common.interceptor.InterceptorListener;
 import net.e6tech.elements.common.reflection.Reflection;
 import net.e6tech.elements.common.util.ExceptionMapper;
 import net.e6tech.elements.common.util.datastructure.Pair;
+import org.ehcache.impl.internal.concurrent.ConcurrentHashMap;
 
 import javax.ws.rs.*;
 import java.io.PrintWriter;
-import java.lang.reflect.Method;
-import java.lang.reflect.Parameter;
-import java.lang.reflect.ParameterizedType;
-import java.lang.reflect.Type;
+import java.lang.reflect.*;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /**
  * Created by futeh.
  */
+@SuppressWarnings("unchecked")
 public class RestfulProxy {
 
-    private String hostAddress;
     private RestfulClient client;
     private Interceptor interceptor;
     private Map<String, String> requestProperties = new LinkedHashMap<>();
@@ -47,8 +48,12 @@ public class RestfulProxy {
     private Response lastResponse;
 
     public RestfulProxy(String hostAddress) {
-        this.hostAddress = hostAddress;
         client = new RestfulClient(hostAddress);
+        interceptor = Interceptor.getInstance();
+    }
+
+    public RestfulProxy(RestfulClient client) {
+        this.client = client;
         interceptor = Interceptor.getInstance();
     }
 
@@ -66,14 +71,11 @@ public class RestfulProxy {
 
     public void setPrinter(PrintWriter printer) {
         this.printer = printer;
+        client.setPrinter(printer);
     }
 
     public String getHostAddress() {
-        return hostAddress;
-    }
-
-    public void setHostAddress(String hostAddress) {
-        this.hostAddress = hostAddress;
+        return client.getAddress();
     }
 
     public boolean isSkipHostnameCheck() {
@@ -94,12 +96,25 @@ public class RestfulProxy {
 
     public  <T> T newProxy(Class<T> serviceClass) {
         client.setPrinter(printer);
-        return interceptor.newInstance(serviceClass, new InvocationHandler(this, serviceClass, printer));
+        return interceptor.newInstance(serviceClass, new InvocationHandler(this, serviceClass, null));
+    }
+
+    public  <T> T newProxy(Class<T> serviceClass, Presentation presentation) {
+        client.setPrinter(printer);
+        return interceptor.newInstance(serviceClass, new InvocationHandler(this, serviceClass, presentation));
     }
 
     public  <T> T newProxy(Class<T> serviceClass, InterceptorListener listener) {
         client.setPrinter(printer);
-        return interceptor.newInstance(serviceClass, new InvocationHandler(this, serviceClass, printer), listener);
+        return interceptor.instanceBuilder(serviceClass, new InvocationHandler(this, serviceClass, null))
+                .listener(listener).build();
+    }
+
+    public  <T> T newProxy(Class<T> serviceClass, Presentation presentation, InterceptorListener listener) {
+        client.setPrinter(printer);
+        return interceptor.instanceBuilder(serviceClass, new InvocationHandler(this, serviceClass, presentation))
+                .listener(listener)
+                .build();
     }
 
     public Map<String, String> getRequestProperties() {
@@ -126,16 +141,20 @@ public class RestfulProxy {
         return lastResponse;
     }
 
-    private static class InvocationHandler implements InterceptorHandler {
+    public RestfulClient getClient() {
+        return client;
+    }
+
+    public static class InvocationHandler implements InterceptorHandler {
         private RestfulProxy proxy;
         private String context;
-        private Map<Method, MethodForwarder> methodForwarders = Collections.synchronizedMap(new HashMap<>());
-        private Map<Method, String> methodSignatures = Collections.synchronizedMap(new HashMap<>());
-        private PrintWriter printer;
+        private Map<Method, MethodForwarder> methodForwarders = new ConcurrentHashMap<>();
+        private Map<Method, String> methodSignatures = new ConcurrentHashMap<>();
+        private Presentation presentation;
 
-        InvocationHandler(RestfulProxy proxy, Class<?> serviceClass, PrintWriter printer) {
+        InvocationHandler(RestfulProxy proxy, Class<?> serviceClass, Presentation presentation) {
             this.proxy = proxy;
-            this.printer = printer;
+            this.presentation = presentation;
             Path path = serviceClass.getAnnotation(Path.class);
             if (path != null) {
                 this.context = path.value();
@@ -147,24 +166,16 @@ public class RestfulProxy {
         }
 
         @Override
-        public Object invoke(Object target, Method thisMethod, Object[] args) throws Throwable {
-            if (printer != null) {
-                String signature = methodSignatures.computeIfAbsent(thisMethod, this::methodSignature);
-                String caller = Reflection.<String, Boolean>mapCallingStackTrace(e -> {
-                    if (e.state().isPresent()) return e.get().toString(); // previous element match.
-                    if (e.get().getMethodName().equals(thisMethod.getName())) e.state(Boolean.TRUE); // match, but we are interested in the next one.
-                    return null;
-                }).orElse("Cannot detect caller");
-                printer.println("Called by: " + caller);
-                printer.println(signature);
-            }
+        public Object invoke(CallFrame frame) throws Throwable {
             Request request = proxy.client.create();
+            if (presentation != null)
+                request.setPresentation(presentation);
             for (Map.Entry<String, String> entry : proxy.requestProperties.entrySet()) {
                 request.setRequestProperty(entry.getKey(), entry.getValue());
             }
 
             String fullContext = context;
-            Path path = thisMethod.getAnnotation(Path.class);
+            Path path = frame.getAnnotation(Path.class);
             if (path != null) {
                 String subctx = path.value();
                 while (subctx.startsWith("/"))
@@ -173,12 +184,45 @@ public class RestfulProxy {
             }
 
             final String ctx = fullContext;
-            MethodForwarder forwarder = methodForwarders.computeIfAbsent(thisMethod, key ->  new MethodForwarder(ctx, key) );
-            Pair<Response, Object> pair = forwarder.forward(request, args);
+            MethodForwarder forwarder;
+            try {
+                forwarder = methodForwarders.computeIfAbsent(frame.getMethod(),
+                        key -> new MethodForwarder(ctx, key));
+                if (proxy.printer != null) {
+                    proxy.printer.println("CALLING RESTFUL METHOD -------------");
+                    String signature = methodSignatures.computeIfAbsent(frame.getMethod(), this::methodSignature);
+                    String caller = Reflection.<String, Boolean>mapCallingStackTrace(e -> {
+                        if (e.state().isPresent()) return e.get().toString(); // previous element match.
+                        if (e.get().getMethodName().equals(frame.getMethod().getName())) e.state(Boolean.TRUE); // match, but we are interested in the next one.
+                        return null;
+                    }).orElse("Cannot detect caller");
+                    proxy.printer.println("Called by: " + caller);
+                    proxy.printer.println("Method: " + signature);
+                    proxy.printer.println();
+                }
+            } catch (IllegalArgumentException ex) {
+                // this is clearly not a restful method
+                if (frame.getTarget() != null)
+                    return frame.invoke(frame.getTarget());
+                return null;
+            }
+            Pair<Response, Object> pair = forwarder.forward(request, frame.getArguments());
             synchronized (proxy) {
                 proxy.lastResponse = pair.key();
             }
             return pair.value();
+        }
+
+        public RestfulProxy getProxy() {
+            return proxy;
+        }
+
+        public Presentation getPresentation() {
+            return presentation;
+        }
+
+        public void setPresentation(Presentation presentation) {
+            this.presentation = presentation;
         }
 
         String methodSignature(Method method) {
@@ -204,7 +248,6 @@ public class RestfulProxy {
                     sb.append(",");
             }
         }
-
     }
 
     private static class MethodForwarder {
@@ -219,6 +262,7 @@ public class RestfulProxy {
         String context;
         QueryParam[] queryParams;
         PathParam[] pathParams;
+        BeanParam[] beanParams;
 
         MethodForwarder(String context, Method method) {
             returnType = method.getReturnType();
@@ -228,18 +272,24 @@ public class RestfulProxy {
             this.context = context;
             queryParams = new QueryParam[paramTypes.length];
             pathParams = new PathParam[paramTypes.length];
+            beanParams = new BeanParam[paramTypes.length];
 
             int idx = 0;
             params = method.getParameters();
             for (Parameter param : params) {
                 QueryParam queryParam = param.getAnnotation(QueryParam.class);
                 PathParam pathParam = param.getAnnotation(PathParam.class);
+                BeanParam beanParam = param.getAnnotation(BeanParam.class);
                 if (queryParam != null) {
                     queryParams[idx] = queryParam;
                 }
 
                 if(pathParam != null) {
                     pathParams[idx] = pathParam;
+                }
+
+                if(beanParam != null) {
+                    beanParams[idx] = beanParam;
                 }
                 idx++;
             }
@@ -257,11 +307,24 @@ public class RestfulProxy {
             }
         }
 
-        @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134"})
+        private Optional<Object> getValue(Object o, AccessibleObject a) {
+            try {
+                if (a instanceof Method) {
+                    return Optional.ofNullable(((Method) a).invoke(o));
+                } else if (a instanceof Field) {
+                    return Optional.ofNullable(Reflection.getProperty(o, ((Field) a).getName()));
+                }
+            } catch(IllegalAccessException | InvocationTargetException e) {
+                // ignored
+            }
+            return Optional.empty();
+        }
+
+        @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134", "squid:S3776", "squid:S00112"})
         Pair<Response, Object> forward(Request request, Object[] args) throws Throwable {
 
             List<Param> paramList = new ArrayList<>();
-            Object postData = null;
+            PostData postData = new PostData();
 
             String fullContext = context;
             for (int i = 0; i < paramTypes.length; i++) {
@@ -274,23 +337,57 @@ public class RestfulProxy {
                     if (args[i] == null)
                         throw new IllegalArgumentException("PathParam {" + pathParams[i].value() + "} cannot be null");
                     String value = args[i].toString();
-                    String valueEscaped = URLEncoder.encode(value,"UTF-8").replaceAll("\\+", "%20");
+                    String valueEscaped = URLEncoder.encode(value, StandardCharsets.UTF_8.name()).replaceAll("\\+", "%20");
                     fullContext = fullContext.replace("{" + pathParams[i].value() + "}", valueEscaped);
                 }
 
-                if (pathParams[i] == null && queryParams[i] == null)
-                    postData = args[i];
+                if(beanParams[i] != null && args[i] != null) {
+                    Object beanParamObj = args[i];
+
+                    Map<String, String> pathParamMap = new HashMap<>();
+                    Reflection.forEachAnnotatedAccessor(beanParamObj.getClass(), PathParam.class, member ->
+                            pathParamMap.put(member.getAnnotation(PathParam.class).value(),
+                                    getValue(beanParamObj, member).map(Object::toString).orElse(null)));
+
+
+                    for(Map.Entry<String, String> entry : pathParamMap.entrySet()) {
+                        if (entry.getValue() == null)
+                            throw new IllegalArgumentException("PathParam {" + entry.getKey() + "} cannot be null");
+                        String valueEscaped = URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8.name()).replaceAll("\\+", "%20");
+                        fullContext = fullContext.replace("{" + entry.getKey() + "}", valueEscaped);
+                    }
+
+                    Map<String, String> queryParamMap = new HashMap<>();
+                    Reflection.forEachAnnotatedAccessor(beanParamObj.getClass(), QueryParam.class, member ->
+                            queryParamMap.put(member.getAnnotation(QueryParam.class).value(),
+                                    getValue(beanParamObj, member).map(Object::toString).orElse(null)));
+
+                    for(Map.Entry<String, String> entry : queryParamMap.entrySet()) {
+                        if (entry.getValue() == null) continue;
+                        Param p = new Param(entry.getKey(), entry.getValue());
+                        paramList.add(p);
+                    }
+
+                }
+
+                if (pathParams[i] == null && queryParams[i] == null && beanParams[i] == null) {
+                    postData.setData(args[i]);
+                    postData.setSpecified(true);
+                }
             }
 
             Response response = null;
             if (post) {
-                response = request.post(fullContext, postData, paramList.toArray(new Param[paramList.size()]));
+                response = request.post(fullContext, postData.getData(), paramList.toArray(new Param[paramList.size()]));
             } else if (put) {
-                response = request.put(fullContext, postData, paramList.toArray(new Param[paramList.size()]));
+                response = request.put(fullContext, postData.getData(), paramList.toArray(new Param[paramList.size()]));
             } else if (get) {
                 response = request.get(fullContext, paramList.toArray(new Param[paramList.size()]));
             } else if (delete) {
-                response = request.delete(fullContext, paramList.toArray(new Param[paramList.size()]));
+                if (postData.isSpecified())
+                    response = request.delete(fullContext, postData.getData(), paramList.toArray(new Param[paramList.size()]));
+                else
+                    response = request.delete(fullContext, paramList.toArray(new Param[paramList.size()]));
             } else {
                 throw new IllegalArgumentException("Unknown HTTP method");
             }
@@ -309,6 +406,11 @@ public class RestfulProxy {
                             Class elementType = (Class) parameterizedReturnType.getActualTypeArguments()[0];
                             CollectionType ctype = TypeFactory.defaultInstance().constructCollectionType(encloseType, elementType);
                             return new Pair<>(response, Response.mapper.readValue(response.getResult(), ctype));
+                        } else if (Map.class.isAssignableFrom(encloseType)) {
+                            Class keyType = (Class) parameterizedReturnType.getActualTypeArguments()[0];
+                            Class valueType = (Class) parameterizedReturnType.getActualTypeArguments()[1];
+                            MapType mtype = TypeFactory.defaultInstance().constructMapType(encloseType, keyType, valueType);
+                            return new Pair<>(response, Response.mapper.readValue(response.getResult(), mtype));
                         }
                     }
                 }

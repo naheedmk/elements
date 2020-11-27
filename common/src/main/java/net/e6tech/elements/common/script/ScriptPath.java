@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -26,8 +26,19 @@ public class ScriptPath {
     private boolean classPath;
     private String fileName;
 
+    @SuppressWarnings("squid:S1192")
     public ScriptPath(String path) {
         this.fileName = path;
+        if (fileName.startsWith("classpath://")) {
+            fileName = fileName.substring("classpath://".length());
+            classPath = true;
+        } else if (fileName.startsWith("classpath:/")) {
+            fileName = fileName.substring("classpath:/".length());
+            classPath = true;
+        } else if (fileName.startsWith("classpath:")) {
+            fileName = fileName.substring("classpath:".length());
+            classPath = true;
+        }
     }
 
     public String getParent() {
@@ -53,6 +64,11 @@ public class ScriptPath {
     public void setFileName(String fileName) {
         this.fileName = fileName;
     }
+
+    public String getClassPath() {
+        return "classpath://" + getFileName();
+    }
+
 
     public Path getPath() {
         return Paths.get(fileName);

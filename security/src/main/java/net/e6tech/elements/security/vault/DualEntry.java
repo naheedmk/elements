@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,7 +22,10 @@ import net.e6tech.elements.common.util.Terminal;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Created by futeh on 12/22/15.
@@ -61,54 +64,60 @@ public class DualEntry {
         this.user2 = user2;
     }
 
-    public void run(String text, int port) {
-        while(!nestedRun(text, port));
+    public List<String> run(String text, int port, List<String> questions) {
+        return nestedRun(text, port, questions);
     }
 
     public void run(String text, ServerSocket serverSocket) {
-        Terminal terminal = new Terminal();
-        while (!_user1(terminal, text, serverSocket));
-        while(!_user2(terminal, serverSocket));
+        run(text, serverSocket, Collections.emptyList());
     }
 
-    private boolean nestedRun(String text, int port) {
-        ServerSocket serverSocket = null;
-        try {
-            serverSocket = new ServerSocket(port);
+    public List<String> run(String text, ServerSocket serverSocket, List<String> questions) {
+        Terminal terminal = new Terminal();
+
+        boolean confirmed;
+        do {
+            confirmed = _user1(terminal, text, serverSocket);
+        } while (!confirmed);
+
+        Response response;
+        do {
+            response = _user2(terminal, serverSocket, questions);
+        } while (!response.confirmed);
+        return response.answers;
+    }
+
+    @SuppressWarnings({"squid:S3776", "squid:S2589"})
+    private List<String> nestedRun(String text, int port, List<String> questions) {
+        ServerSocket s = null;
+        try (ServerSocket serverSocket = new ServerSocket(port)) {
+            s = serverSocket;
             serverSocket.setReuseAddress(true);
+            return run(text, serverSocket, questions);
         } catch (IOException e) {
             try {
-                if (serverSocket != null)
-                    serverSocket.close();
+                if (s != null)
+                    s.close();
             } catch (Exception ex) {
                 Logger.suppress(ex);
             }
             throw new SystemException(e);
         }
-
-        Terminal terminal = new Terminal();
-        try {
-            if (!_user1(terminal, text, serverSocket))
-                return false;
-            return _user2(terminal, serverSocket);
-        } catch (Exception ex) {
-            Logger.suppress(ex);
-            return true; // return true to stop while loop in run()
-        } finally {
-            if (serverSocket != null) {
-                try {
-                    serverSocket.close();
-                } catch (IOException e) {
-                    Logger.suppress(e);
-                }
-            }
-        }
     }
 
-    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134", "squid:S00100", "squid:S2093"})
+    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134", "squid:S00100", "squid:S2093",
+            "squid:S3776"})
     private boolean _user1(Terminal terminal, String text, ServerSocket serverSocket) {
-        if (user1 == null || user2 == null || user1.getUser() == null || user2.getUser() == null)
+        String askConnect =  serverSocket.getLocalPort() + " to provide user name and password.";
+        if (user1 == null || user2 == null || user1.getUser() == null || user2.getUser() == null) {
             terminal.println(text);
+            if (user1 != null && user1.getUser() != null && user1.getPassword() != null) {
+                terminal.println("Please have user2 connect to port " + askConnect);
+            } else {
+                terminal.println("Please have user1 connect to port " + askConnect);
+            }
+        }
+
         if (user1 == null || user1.getUser() == null) {
             Terminal t = null;
             try {
@@ -123,10 +132,10 @@ public class DualEntry {
                     u1 = t.readLine("Username: ");
                     pwd = t.readPassword("Password: ");
                 }
-                if (!verifyPassword(t, pwd))
+                if (!confirmPassword(t, pwd))
                     return false;
                 user1 = new Credential(u1, pwd);
-                t.println("Please have user2 connect to port " + serverSocket.getLocalPort() + " to provide user name and password");
+                t.println("Please have user2 connect to port " + askConnect);
             } catch (Exception ex) {
                 Logger.suppress(ex);
                 terminal.println("Error getting user1 name and password: " + ex.getMessage());
@@ -139,8 +148,11 @@ public class DualEntry {
         return true;
     }
 
-    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134", "squid:S00100", "squid:S2093"})
-    private boolean _user2(Terminal terminal, ServerSocket serverSocket) {
+    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134", "squid:S00100", "squid:S2093", "squid:S3776"})
+    private Response _user2(Terminal terminal, ServerSocket serverSocket, List<String> questions) {
+        if (questions == null)
+            questions = Collections.emptyList();
+        Response response = new Response();
         while (user2 == null || user2.getUser() == null) {
             Terminal t = null;
             try {
@@ -161,22 +173,32 @@ public class DualEntry {
                     u2 = t.readLine("Username:");
                     pwd = t.readPassword("Password:");
                 }
-                if (!verifyPassword(t, pwd))
-                    return false;
+                if (!confirmPassword(t, pwd))
+                    return response;
                 user2 = new Credential(u2, pwd);
+                response.answers = ask(t, questions);
             } catch (Exception e) {
                 Logger.suppress(e);
                 terminal.println("Error getting user2 name and password: " + e.getMessage());
-                return false;
+                return response;
             } finally {
                 if (t != null)
                     t.close();
             }
         }
-        return true;
+        response.confirmed = true;
+        return response;
     }
 
-    private boolean verifyPassword(Terminal terminal, char[] pwd) {
+    private List<String> ask(Terminal terminal, List<String> questions) {
+        List<String> answers = new ArrayList<>();
+        for (String question : questions) {
+            answers.add(terminal.readLine(question));
+        }
+        return answers;
+    }
+
+    private boolean confirmPassword(Terminal terminal, char[] pwd) {
         if (newUserMode) {
             char[] pwd2 = terminal.readPassword("Retype password: ");
             if (!Arrays.equals(pwd, pwd2)) {
@@ -201,5 +223,10 @@ public class DualEntry {
         if (user2 != null)
             user2.clear();
         user1 = user2 = null;
+    }
+
+    private static class Response {
+        boolean confirmed = false;
+        List<String> answers = Collections.emptyList();
     }
 }

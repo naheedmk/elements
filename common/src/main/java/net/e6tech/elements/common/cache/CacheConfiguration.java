@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,19 +15,14 @@
  */
 package net.e6tech.elements.common.cache;
 
-import net.e6tech.elements.common.logging.Logger;
 import net.e6tech.elements.common.util.SystemException;
 
 import javax.cache.Cache;
 import javax.cache.CacheException;
 import javax.cache.CacheManager;
 import javax.cache.Caching;
-import javax.cache.configuration.MutableConfiguration;
-import javax.cache.expiry.TouchedExpiryPolicy;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Created by futeh.
@@ -37,16 +32,16 @@ public class CacheConfiguration {
     public static final long DEFAULT_EXPIRY = 15 * 60 * 1000L;
 
     private static final String DEFAULT_PROVIDER = "net.e6tech.elements.common.cache.ehcache.EhcacheProvider";
-    private static Map<String, CacheManager> managers = Collections.synchronizedMap(new HashMap<>());
+    private static Map<String, CacheManager> managers = new ConcurrentHashMap<>();
 
     private CacheProvider provider;
     private CacheManager cacheManager;
-    private String name;
     private long expiry = DEFAULT_EXPIRY;
     private long maxEntries = 1024L;
     private boolean storeByValue = false;
 
     public CacheConfiguration() {
+        // default constructor
     }
 
     public CacheProvider getProvider() {
@@ -89,7 +84,7 @@ public class CacheConfiguration {
 
         if (provider == null) {
             try {
-                provider = (CacheProvider) getClass().getClassLoader().loadClass(DEFAULT_PROVIDER).newInstance();
+                provider = (CacheProvider) getClass().getClassLoader().loadClass(DEFAULT_PROVIDER).getDeclaredConstructor().newInstance();
             } catch (Exception e) {
                 throw new SystemException(e);
             }
@@ -99,15 +94,15 @@ public class CacheConfiguration {
     }
 
     public <K, V> Cache<K, V> getCache(String name, Class<K> keyClass, Class<V> valueClass) {
-        CacheManager cacheManager = getCacheManager();
-        Cache<K, V> cache = cacheManager.getCache(name, keyClass, valueClass);
+        CacheManager manager = getCacheManager();
+        Cache<K, V> cache = manager.getCache(name, keyClass, valueClass);
         if (cache != null)
             return cache;
 
         try {
             return provider.createCache(this, name, keyClass, valueClass);
         } catch (CacheException ex) {
-            cache = cacheManager.getCache(name, keyClass, valueClass);
+            cache = manager.getCache(name, keyClass, valueClass);
             if (cache != null)
                 return cache;
             else

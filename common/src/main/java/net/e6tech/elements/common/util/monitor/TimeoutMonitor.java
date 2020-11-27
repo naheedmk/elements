@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@ import java.util.concurrent.ExecutorService;
 /**
  * Created by futeh.
  */
-@SuppressWarnings({"squid:S134", "squid:S135"})
+@SuppressWarnings({"squid:S134", "squid:S135", "squid:S3776"})
 public class TimeoutMonitor {
 
     long timeout = -1; // means disable, 0 means use default

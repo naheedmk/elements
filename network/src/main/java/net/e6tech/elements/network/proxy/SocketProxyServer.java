@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,7 +21,8 @@ import net.e6tech.elements.common.resources.Startable;
 
 import java.io.IOException;
 import java.net.ServerSocket;
-import java.util.concurrent.*;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class SocketProxyServer implements Startable, Runnable {
 
@@ -67,9 +68,8 @@ public class SocketProxyServer implements Startable, Runnable {
 
     public void start() {
         if (threadPool == null) {
-            ThreadGroup group = Thread.currentThread().getThreadGroup();
             threadPool = Executors.newCachedThreadPool(runnable -> {
-                Thread thread = new Thread(group, runnable, "SocketProxyServer");
+                Thread thread = new Thread(runnable, "SocketProxyServer");
                 thread.setName("SocketProxyServer-" + thread.getId());
                 thread.setDaemon(true);
                 return thread;

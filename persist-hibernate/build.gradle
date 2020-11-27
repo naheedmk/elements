@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,18 +16,20 @@ limitations under the License.
 
 dependencies {
     compile project(':persist')
-    compile ('org.hibernate:hibernate-core:5.2.10.Final') {
+    compile ("org.hibernate:hibernate-core:${hibernateVersion}") {
         exclude group: 'xml-apis'
+        exclude group: 'org.glassfish.jaxb' // from common
     }
-    compile ('org.hibernate:hibernate-entitymanager:5.2.10.Final') {
+    compile ("org.hibernate:hibernate-entitymanager:${hibernateVersion}") {
         exclude group: 'xml-apis'
+        exclude group: 'org.glassfish.jaxb' // from common
     }
-    compile ('org.hibernate:hibernate-ehcache:5.2.10.Final') {
+    compile ("org.hibernate:hibernate-jcache:${hibernateVersion}") {
         exclude group: 'xml-apis'
+        exclude group: 'org.glassfish.jaxb'  // from common
     }
-    compile 'net.sf.ehcache:ehcache:2.10.3'
 
-    testCompile("org.junit.jupiter:junit-jupiter-api:5.0.0-M4")
-    testCompile("org.junit.platform:junit-platform-launcher:1.0.0-M4")
-    testRuntime("org.junit.jupiter:junit-jupiter-engine:5.0.0-M4")
+    testCompile "org.junit.jupiter:junit-jupiter-api:${junitJupiterVersion}"
+    testCompile "org.junit.platform:junit-platform-launcher:${junitPlatformLauncherVersion}"
+    testRuntime "org.junit.jupiter:junit-jupiter-engine:${junitJupiterVersion}"
 }

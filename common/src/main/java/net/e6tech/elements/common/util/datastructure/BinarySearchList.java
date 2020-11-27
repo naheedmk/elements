@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ import java.util.List;
  * BinarySearchList supports binary search within a list.
  * Created by futeh.
  */
-@SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134"})
+@SuppressWarnings({"unchecked", "squid:MethodCyclomaticComplexity", "squid:S134"})
 public class BinarySearchList<T extends Comparable> implements Iterable<T> {
 
     private List<T> sortedList = new ArrayList<>(); // Needs ArrayList for it O(1) get
@@ -79,7 +79,6 @@ public class BinarySearchList<T extends Comparable> implements Iterable<T> {
         Comparable candidate = get(index);
         if (candidate.compareTo(cmp) == 0) {
             sortedList.add(index, cmp);
-            return;
         } else if (candidate.compareTo(cmp) > 0) { // next candidate needs to be of lower index
             privateAdd(min, (max + min) / 2, cmp); // because (max + min + 1)/2 is biased toward upper value which may end up
                                              // being equal to max

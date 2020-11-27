@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package net.e6tech.elements.security.vault;
 import net.e6tech.elements.common.util.SystemException;
 import net.e6tech.elements.security.SymmetricCipher;
 
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.Properties;
 
@@ -48,7 +49,7 @@ public class KeyProtected {
         if (clear.getProperties() != null) {
             try {
                 String str = mapper.writeValueAsString(clear.getProtectedProperties());
-                str = encryption.encrypt(key.asSecretKey(), str.getBytes("UTF-8"), iv);
+                str = encryption.encrypt(key.asSecretKey(), str.getBytes(StandardCharsets.UTF_8), iv);
                 secret.setProtectedProperties(iv + "$" + str  + "$" + key.alias() + "$" + key.version());
             } catch (Exception e) {
                 throw new SystemException(e);
@@ -91,7 +92,7 @@ public class KeyProtected {
 
                 byte[] props = encryption.decrypt(key.asSecretKey(), components[1], components[0]);
 
-                Properties properties = mapper.readValue(new String(props, "UTF-8"), Properties.class);
+                Properties properties = mapper.readValue(new String(props, StandardCharsets.UTF_8), Properties.class);
                 ct.setProtectedProperties(properties);
             }
             return ct;

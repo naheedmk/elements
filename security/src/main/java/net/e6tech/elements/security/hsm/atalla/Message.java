@@ -29,7 +29,9 @@ public class Message {
         parse(message);
     }
 
-    protected void parse(String msg) {
+    private void parse(String msg) {
+        if (msg == null)
+            throw new BadMessageException("Null message");
         String message = msg;
         int beginIndex = message.indexOf('<');
         int endIndex = message.lastIndexOf('>');
@@ -42,6 +44,10 @@ public class Message {
         for (int i = 0; i < tokens.length; i++)
             tokens[i] = tokens[i].trim();
         fields = tokens;
+    }
+
+    public int length() {
+        return fields.length;
     }
 
     public String getField(int index) {

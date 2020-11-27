@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import java.util.Base64;
 import java.util.Random;
 
 public class Password {
+    private static Random random = new Random();
     // The higher the number of iterations the more
     // expensive computing the hash is for us and
     // also for an attacker.
@@ -44,7 +45,7 @@ public class Password {
             builder.append(ch);
         builder.append("!@#$%^&*-_+=~|<>");
         String charSet = builder.toString();
-        Random random = new Random();
+
         int len = min + random.nextInt(max - min);
         char[] password = new char[len];
         for (int i = 0; i < password.length; i++) {

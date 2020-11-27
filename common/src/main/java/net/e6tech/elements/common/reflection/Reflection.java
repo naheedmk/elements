@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,25 +15,34 @@
  */
 package net.e6tech.elements.common.reflection;
 
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import net.e6tech.elements.common.logging.Logger;
+import net.e6tech.elements.common.resources.Provision;
 import net.e6tech.elements.common.util.SystemException;
 import net.e6tech.elements.common.util.TextSubstitution;
+import net.e6tech.elements.common.util.datastructure.Pair;
 import net.e6tech.elements.common.util.lambda.Each;
 
 import java.beans.*;
 import java.lang.annotation.Annotation;
-import java.lang.ref.WeakReference;
 import java.lang.reflect.*;
+import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.util.*;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static java.util.Locale.ENGLISH;
 
 /**
  * Created by futeh.
  */
-@SuppressWarnings({"squid:S134", "squid:S1149", "squid:S1141", "squid:MethodCyclomaticComplexity"})
+@SuppressWarnings({"unchecked", "squid:S134", "squid:S1149", "squid:S1141", "squid:MethodCyclomaticComplexity", "squid:S3776"})
 public class Reflection {
     @SuppressWarnings("squid:S1185")
     static final class PrivateSecurityManager extends SecurityManager {
@@ -43,11 +52,110 @@ public class Reflection {
         }
     }
 
+    private static Set<Class> convertibleTypes = new HashSet();
+    static {
+        convertibleTypes.add(Boolean.TYPE);
+        convertibleTypes.add(Boolean.class);
+        convertibleTypes.add(Double.TYPE);
+        convertibleTypes.add(Double.class);
+        convertibleTypes.add(Float.TYPE);
+        convertibleTypes.add(Float.class);
+        convertibleTypes.add(Integer.TYPE);
+        convertibleTypes.add(Integer.class);
+        convertibleTypes.add(Long.TYPE);
+        convertibleTypes.add(Long.class);
+        convertibleTypes.add(Short.TYPE);
+        convertibleTypes.add(Short.class);
+        convertibleTypes.add(BigDecimal.class);
+        convertibleTypes.add(BigInteger.class);
+    }
+
     private static final PrivateSecurityManager securityManager = new PrivateSecurityManager();
 
-    private static Map<Method, WeakReference<PropertyDescriptor>> methodPropertyDescriptors = Collections.synchronizedMap(new WeakHashMap<>());
-    private static Map<String, WeakReference<PropertyDescriptor>> propertyDescriptors = Collections.synchronizedMap(new WeakHashMap<>());
-    private static Map<Class, WeakReference<Type[]>> parametrizedTypes = Collections.synchronizedMap(new WeakHashMap<>());
+    private static LoadingCache<Method, PropertyDescriptor> methodPropertyDescriptors = CacheBuilder.newBuilder()
+            .maximumSize(10000)
+            .initialCapacity(500)
+            .concurrencyLevel(Provision.cacheBuilderConcurrencyLevel)
+            .expireAfterWrite(120 * 60 * 1000L, TimeUnit.MILLISECONDS)
+            .build(new CacheLoader<Method, PropertyDescriptor>() {
+                public PropertyDescriptor load(Method method) throws IntrospectionException {
+                    String name = method.getName();
+                    Parameter[] parameters = method.getParameters();
+                    String property ;
+                    if (name.startsWith("set")) {
+                        if (parameters.length != 1)
+                            throw new IllegalArgumentException("" + method.getName() + " is not a setter");
+                        property = name.substring(3);
+                    } else if (name.startsWith("get")) {
+                        if (parameters.length != 0)
+                            throw new IllegalArgumentException("" + method.getName() + " is not a getter");
+                        property = name.substring(3);
+                    } else if (name.startsWith("is")) {
+                        if (parameters.length != 0)
+                            throw new IllegalArgumentException("" + method.getName() + " is not a getter");
+                        property = name.substring(2);
+                    } else {
+                        throw new IllegalArgumentException("" + method.getName() + " is not an property accessor");
+                    }
+
+                    boolean lowerCase = true;
+                    if (property.length() > 1 && Character.isUpperCase(property.charAt(1)))
+                        lowerCase = false;
+                    if (lowerCase)
+                        property = property.substring(0, 1).toLowerCase(ENGLISH) + property.substring(1);
+                    return new PropertyDescriptor(property, method.getDeclaringClass());
+                }
+            });
+
+    private static LoadingCache<Pair<Class, String>, PropertyDescriptor> propertyDescriptors = CacheBuilder.newBuilder()
+            .maximumSize(10000)
+            .initialCapacity(500)
+            .concurrencyLevel(Provision.cacheBuilderConcurrencyLevel)
+            .expireAfterWrite(120 * 60 * 1000L, TimeUnit.MILLISECONDS)
+            .build(new CacheLoader<Pair<Class, String>, PropertyDescriptor>() {
+                @Override
+                public PropertyDescriptor load(Pair<Class, String> key) throws Exception {
+                    Class cls = key.key();
+                    String property = key.value();
+                    PropertyDescriptor descriptor;
+                    try {
+                        descriptor = new PropertyDescriptor(property, cls,
+                                "is" + TextSubstitution.capitalize(property), null);
+                    } catch (IntrospectionException e) {
+                        throw new SystemException(cls.getName() + "." + property, e);
+                    }
+                    return descriptor;
+                }
+            });
+
+    private static LoadingCache<Class, Type[]> parametrizedTypes = CacheBuilder.newBuilder()
+            .maximumSize(10000)
+            .initialCapacity(100)
+            .concurrencyLevel(Provision.cacheBuilderConcurrencyLevel)
+            .expireAfterWrite(120 * 60 * 1000L, TimeUnit.MILLISECONDS)
+            .build(new CacheLoader<Class, Type[]>() {
+                @Override
+                public Type[] load(Class clazz) throws Exception {
+                    Class cls = clazz;
+                    Type[] types = null;
+                    while (!cls.equals(Object.class)) {
+                        try {
+                            Type genericSuper = cls.getGenericSuperclass();
+                            if (genericSuper instanceof ParameterizedType) {
+                                ParameterizedType parametrizedType = (ParameterizedType) genericSuper;
+                                types = parametrizedType.getActualTypeArguments();
+                                break;
+                            }
+                        } catch (Exception th) {
+                            logger.warn(th.getMessage(), th);
+                        }
+                        cls = cls.getSuperclass();
+                    }
+                    if (types == null)
+                        throw new IllegalArgumentException("No parametrized types found");
+                    return types;
+                }
+            });
 
     static Logger logger = Logger.getLogger();
 
@@ -56,45 +164,23 @@ public class Reflection {
 
     // should use weak hash map
     public static PropertyDescriptor propertyDescriptor(Method method) {
-        WeakReference<PropertyDescriptor> ref = methodPropertyDescriptors.get(method);
-        PropertyDescriptor descriptor =  (ref == null) ? null : ref.get();
-        if (descriptor == null) {
-            try {
-                String name = method.getName();
-                Parameter[] parameters = method.getParameters();
-                String property ;
-                if (name.startsWith("set")) {
-                    if (parameters.length != 1)
-                        throw new IllegalArgumentException("" + method.getName() + " is not a setter");
-                    property = name.substring(3);
-                } else if (name.startsWith("get")) {
-                    if (parameters.length != 0)
-                        throw new IllegalArgumentException("" + method.getName() + " is not a getter");
-                    property = name.substring(3);
-                } else if (name.startsWith("is")) {
-                    if (parameters.length != 0)
-                        throw new IllegalArgumentException("" + method.getName() + " is not a getter");
-                    property = name.substring(2);
-                } else {
-                    throw new IllegalArgumentException("" + method.getName() + " is not an property accessor");
-                }
-
-                boolean lowerCase = true;
-                if (property.length() > 1 && Character.isUpperCase(property.charAt(1)))
-                    lowerCase = false;
-                if (lowerCase)
-                    property = property.substring(0, 1).toLowerCase(ENGLISH) + property.substring(1);
-                descriptor = new PropertyDescriptor(property, method.getDeclaringClass());
-                methodPropertyDescriptors.put(method, new WeakReference<PropertyDescriptor>(descriptor));
-            } catch (IntrospectionException e) {
-                throw new SystemException(e);
-            }
+        try {
+            return methodPropertyDescriptors.get(method);
+        } catch (ExecutionException e) {
+            throw new SystemException(e.getCause());
         }
-        return descriptor;
+    }
+
+    public static Class getCallingClass() {
+        return privateGetCallingClass(1);
+    }
+
+    public static Class getCallingClass(int index) {
+        return privateGetCallingClass(index + 1);
     }
 
     @SuppressWarnings("squid:S1872")
-    public static Class getCallingClass() {
+    public static Class privateGetCallingClass(int index) {
         Class<?>[] trace = securityManager.getClassContext(); // trace[0]
                                                               // trace[1] is Reflection because of this call.
                                                               // trace[2] is the caller who wants the calling class
@@ -107,12 +193,19 @@ public class Reflection {
                 break;
         }
 
-        // trace[i] = Reflection; trace[i+1] = caller; trace[i+2] = caller's caller
-        if (i >= trace.length || i + 2 >= trace.length) {
+        // trace[i] = Reflection this method
+        // trace[i+1] = Reflection.getCallingClass method
+        // trace[i+2] = caller
+        // trace[i+3] = caller's caller
+        if (i >= trace.length || i + 2 + index >= trace.length) {
             throw new IllegalStateException("Failed to find caller in the stack");
         }
 
-        return trace[i + 2];
+        return trace[i + 2 + index];
+    }
+
+    public static Class<?>[] getClassContext() {
+        return securityManager.getClassContext();
     }
 
     public static <V, C> Optional<V> mapCallingStackTrace(Function<Each<StackTraceElement,C>, ? extends V> mapper) {
@@ -158,7 +251,7 @@ public class Reflection {
 
     public static <T> T newInstance(String className, ClassLoader loader) {
         try {
-            return (T) loadClass(className, loader).newInstance();
+            return (T) loadClass(className, loader).getDeclaredConstructor().newInstance();
         } catch (Exception e) {
             throw new SystemException(e);
         }
@@ -179,23 +272,114 @@ public class Reflection {
         }
     }
 
+
+    public static Map<Signature, Map<Class<? extends Annotation>, Annotation>> getAnnotationsByName(Class cls) {
+        return getAnnotations(cls).entrySet().stream()
+                .filter(x -> x.getKey() instanceof NamedSignature)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    public static Map<Signature, Map<Class<? extends Annotation>, Annotation>> getAnnotations(Class cls) {
+        List<Class> classes = collectClass(cls);
+
+        Map<Signature<?>, Map<Class<? extends Annotation>, Annotation>> annotations = new HashMap<>(50);
+        Map<Class<? extends Annotation>, Annotation> classAnnotations = new HashMap<>(50);
+        for (Class c : classes) {
+            for (Method method : c.getDeclaredMethods()) {
+                Map<Class<? extends Annotation>, Annotation> map = Accessor.getAnnotations(method);
+                MethodSignature signature = new MethodSignature(method);
+                annotations.putIfAbsent(signature, map);
+            }
+
+            Field[] fields = c.getDeclaredFields();
+            for (Field field : fields) {
+                Map<Class<? extends Annotation>, Annotation> map = Accessor.getAnnotations(field);
+                FieldSignature signature = new FieldSignature(field);
+                if (!annotations.containsKey(signature)) {
+                    annotations.put(signature, map);
+                    NamedSignature named = new NamedSignature(field.getName());
+                    annotations.put(named, map);
+                }
+            }
+
+            // unlike method and field, class signature aggregates all annotations including it super classes.
+            ClassSignature classSignature = new ClassSignature(cls);
+            for (Annotation a : c.getAnnotations()) {
+                classAnnotations.putIfAbsent(a.annotationType(), a);
+            }
+            annotations.put(classSignature, classAnnotations);
+        }
+
+        for (Class c : classes) {
+            try {
+                for (PropertyDescriptor desc : Introspector.getBeanInfo(c).getPropertyDescriptors()) {
+                    Map<Class<? extends Annotation>, Annotation> map = Accessor.getAnnotations(desc);
+                    PropertySignature signature = new PropertySignature(desc);
+                    if (!annotations.containsKey(signature)) {
+                        annotations.put(signature, map);
+                        NamedSignature named = new NamedSignature(desc.getName());
+                        Map<Class<? extends Annotation>, Annotation> namedMap = annotations.computeIfAbsent(named, key -> new HashMap<>());
+                        for (Map.Entry<Class<? extends Annotation>, Annotation> entry : map.entrySet()) {
+                            namedMap.putIfAbsent(entry.getKey(), entry.getValue());
+                        }
+                    }
+                }
+            } catch (IntrospectionException e) {
+                throw new SystemException(e);
+            }
+        }
+
+        return annotations.entrySet().stream()
+                .filter(x -> x.getValue().size() > 0)
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+    }
+
+    private static List<Class> collectClass(Class cls) {
+        LinkedHashSet<Class> set = new LinkedHashSet<>();
+        Class tmp =  cls;
+        while (tmp != null && !tmp.equals(Object.class)) {
+            set.add(tmp);
+            Class[] interfaces = tmp.getInterfaces();
+            for (Class intf : interfaces) {
+                collectInterfaces(intf, set);
+            }
+            tmp = tmp.getSuperclass();
+        }
+        return new ArrayList<>(set);
+    }
+
+
+    // this needs to be breadth first
+    private static void collectInterfaces(Class intf, Set<Class> set) {
+        if (!set.contains(intf))
+            set.add(intf);
+        else
+            return;
+        Class[] interfaces = intf.getInterfaces();
+        for (Class i : interfaces) {
+            collectInterfaces(i, set);
+        }
+    }
+
+    public static BeanInfo getBeanInfo(Class cls) {
+        try {
+            return Introspector.getBeanInfo(cls);
+        } catch (IntrospectionException e) {
+            throw new SystemException(e);
+        }
+    }
+
     public static void forEachAnnotatedAccessor(Class objectClass,
                                                 Class<? extends Annotation> annotationClass,
                                                 Consumer<AccessibleObject> consumer) {
         Class cls = objectClass;
-        BeanInfo beanInfo = null;
-        try {
-            beanInfo = Introspector.getBeanInfo(cls);
-        } catch (IntrospectionException e) {
-            throw logger.systemException(e);
-        }
+        BeanInfo beanInfo = getBeanInfo(cls);
         PropertyDescriptor[] props = beanInfo.getPropertyDescriptors();
         for (PropertyDescriptor prop : props) {
-            if (prop.getReadMethod() == null) {
-                continue;
-            }
-            if (prop.getReadMethod().getAnnotation(annotationClass) != null) {
+            if (prop.getReadMethod() != null && prop.getReadMethod().getAnnotation(annotationClass) != null) {
                 consumer.accept(prop.getReadMethod());
+            } else if (prop.getWriteMethod() != null && prop.getWriteMethod().getAnnotation(annotationClass) != null) {
+                consumer.accept(prop.getWriteMethod());
             }
         }
 
@@ -219,24 +403,20 @@ public class Reflection {
                 cls = object.getClass();
             }
 
-            String key = cls.getName() + "." + property;
-            WeakReference<PropertyDescriptor> ref = propertyDescriptors.get(key);
-            PropertyDescriptor descriptor =  (ref == null) ? null : ref.get();
-            if (descriptor == null) {
-                try {
-                    descriptor = new PropertyDescriptor(property, object.getClass(),
-                            "is" + TextSubstitution.capitalize(property), null);
-                    propertyDescriptors.put(key, new WeakReference<PropertyDescriptor>(descriptor));
-                } catch (IntrospectionException e) {
-                    throw new SystemException(object.getClass().getName() + "." + property, e);
-                }
-            }
-
-            if (descriptor.getReadMethod() == null)
+            PropertyDescriptor descriptor =  getPropertyDescriptor(cls, property);
+            if (descriptor == null || descriptor.getReadMethod() == null)
                 return null;
             return (V) descriptor.getReadMethod().invoke(object);
         } catch (Exception e) {
             throw new SystemException(object.getClass().getName() + "." + property, e);
+        }
+    }
+
+    public static PropertyDescriptor getPropertyDescriptor(Class cls, String property) {
+        try {
+            return propertyDescriptors.get(new Pair<>(cls, property));
+        } catch (ExecutionException e) {
+            throw new SystemException(e.getCause());
         }
     }
 
@@ -278,37 +458,22 @@ public class Reflection {
     }
 
     public static Class getParametrizedType(Class clazz, int index) {
-        WeakReference<Type[]> ref = parametrizedTypes.get(clazz);
-        Type[] types =  (ref == null) ? null : ref.get();
-
-        if (types == null) {
-            Class cls = clazz;
-            while (!cls.equals(Object.class)) {
-                try {
-                    Type genericSuper = cls.getGenericSuperclass();
-                    if (genericSuper instanceof ParameterizedType) {
-                        ParameterizedType parametrizedType = (ParameterizedType) genericSuper;
-                        types = parametrizedType.getActualTypeArguments();
-                        break;
-                    }
-                } catch (Exception th) {
-                    logger.warn(th.getMessage(), th);
-                }
-                cls = cls.getSuperclass();
-            }
-            if (types != null) {
-                parametrizedTypes.put(clazz, new WeakReference<Type[]>(types));
-            }
+        Type[] types;
+        try {
+            types = parametrizedTypes.get(clazz);
+        } catch (ExecutionException e) {
+            throw new SystemException(e.getCause());
         }
 
-        if (types == null)
-            throw new IllegalArgumentException("No parametrized types found");
-        if (types.length <= index)
+        if (types.length <= index) {
             throw new IllegalArgumentException("No parametrized type at index=" + index);
-        if (types[index] instanceof Class) {
+        } else if (types[index] instanceof Class) {
             return (Class) types[index];
+        } else if (types[index] instanceof ParameterizedType &&  ((ParameterizedType) types[index]).getRawType() instanceof Class) {
+            return (Class)((ParameterizedType) types[index]).getRawType();
+        } else {
+            return null;
         }
-        return null;
     }
 
     public static <T> List<T> newInstance(Class<T> cls, List objectList) {
@@ -336,12 +501,14 @@ public class Reflection {
         return (new Replicator()).newInstance(cls, object, new HashMap<>(), listener);
     }
 
-    public static void copyInstance(Object target, Object object) {
+    public static <T> T copyInstance(T target, Object object) {
         (new Replicator()).copy(target, object, new HashMap<>(), null);
+        return target;
     }
 
-    public static void copyInstance(Object target, Object object, CopyListener listener) {
+    public static <T> T copyInstance(T target, Object object, CopyListener listener) {
         (new Replicator()).copy(target, object, new HashMap<>(), listener);
+        return target;
     }
 
     public static boolean compare(Object target, Object object) {
@@ -365,14 +532,6 @@ public class Reflection {
 
         private synchronized PropertyDescriptor[] getPropertyDescriptors(Class cls) {
             return propertyDescriptors.computeIfAbsent(cls, key -> getBeanInfo(key).getPropertyDescriptors());
-        }
-
-        private BeanInfo getBeanInfo(Class cls) {
-            try {
-                return Introspector.getBeanInfo(cls);
-            } catch (IntrospectionException e) {
-                throw new SystemException(e);
-            }
         }
 
         public synchronized Map<Class, Map<String, PropertyDescriptor>> getTargetPropertiesDescriptor() {
@@ -403,6 +562,13 @@ public class Reflection {
             if (object == null)
                 return null;
 
+            T buildin = null;
+            if (toType instanceof Class) {
+                buildin = (T) convertBuiltinType((Class) toType, object);
+                if (buildin != null)
+                    return buildin;
+            }
+
             Integer hashCode = null;
             if (!object.getClass().isPrimitive()) {
                 hashCode = System.identityHashCode(object);
@@ -412,13 +578,25 @@ public class Reflection {
 
             T target = null;
             if (toType instanceof Class) {
+                Class cls = (Class) toType;
                 if (Enum.class.isAssignableFrom((Class)toType)) {
-                    target = (T) Enum.valueOf((Class)toType, object.toString());
-                } else if (Enum.class.isAssignableFrom(object.getClass()) && String.class.isAssignableFrom((Class) toType)) {
+                    target = (T) Enum.valueOf(cls, object.toString());
+                } else if (Enum.class.isAssignableFrom(object.getClass()) && String.class.isAssignableFrom(cls)) {
                     target = (T) ((Enum) object).name();
+                } else if (Collection.class.isAssignableFrom(cls)) {
+                    Collection collection = newCollection(cls);
+                    target = (T) collection;
+                    if (object instanceof Collection) {
+                        Collection c = (Collection) object;
+                        for (Object o : c) {
+                            collection.add(o);
+                        }
+                    } else {
+                        throw new IllegalStateException("Do not know how to convert " + object.getClass() + " to " + toType);
+                    }
                 } else {
                     try {
-                        target = (T) ((Class) toType).newInstance();
+                        target = (T) cls.getDeclaredConstructor().newInstance();
                     } catch (Exception e) {
                         throw new SystemException(e);
                     }
@@ -429,29 +607,20 @@ public class Reflection {
                 Class enclosedType = (Class) parametrized.getRawType();
                 Type type = parametrized.getActualTypeArguments()[0];
                 if (Collection.class.isAssignableFrom(enclosedType)) {
-                    Collection collection = null;
-                    if (List.class.isAssignableFrom(enclosedType)) {
-                        collection = new ArrayList<>();
-                    } else if (Set.class.isAssignableFrom(enclosedType)) {
-                        collection = new LinkedHashSet<>();
-                    } else {
-                        collection = new ArrayList<>();
-                    }
+                    Collection collection = newCollection(enclosedType);
                     target = (T) collection;
-
                     if (object instanceof Collection) {
                         Collection c = (Collection) object;
                         for (Object o : c) {
                             Object converted = newInstance(type ,o, seen, listener);
                             collection.add(converted);
                         }
-
                     } else {
                         throw new IllegalStateException("Do not know how to convert " + object.getClass() + " to " + toType);
                     }
                 } else {
                     try {
-                        target = (T) enclosedType.newInstance();
+                        target = (T) enclosedType.getDeclaredConstructor().newInstance();
                     } catch (Exception e) {
                         throw new SystemException(e);
                     }
@@ -462,6 +631,47 @@ public class Reflection {
             if (hashCode != null)
                 seen.put(hashCode, target);
             return target;
+        }
+
+        protected Collection newCollection(Class cls) {
+            Collection collection = null;
+            if (List.class.isAssignableFrom(cls)) {
+                collection = new ArrayList<>();
+            } else if (Set.class.isAssignableFrom(cls)) {
+                collection = new LinkedHashSet<>();
+            } else {
+                collection = new ArrayList<>();
+            }
+            return collection;
+        }
+
+        @SuppressWarnings("all")
+        protected Object convertBuiltinType(Class type, Object object) {
+            if (String.class.isAssignableFrom(type)) {
+                return object.toString();
+            }
+
+            if (!convertibleTypes.contains(type))
+                return null;
+
+            if (type == Boolean.TYPE || type == Boolean.class)
+                return new Boolean(object.toString());
+            else if (type == Double.TYPE || type == Double.class) {
+                return new Double(object.toString());
+            } else if (type == Float.TYPE || type == Float.class) {
+                return new Float(object.toString());
+            } else if (type == Integer.TYPE || type == Integer.class) {
+                return new Integer(object.toString());
+            } else if (type == Long.TYPE || type == Long.class) {
+                return new Long(object.toString());
+            } else if (type == Short.TYPE || type == Short.class) {
+                return new Short(object.toString());
+            } else if (type == BigDecimal.class) {
+                return new BigDecimal(object.toString());
+            } else if (type == BigInteger.class) {
+                return new BigInteger(object.toString());
+            }
+            return null;
         }
 
         public void copy(Object target, Object object, CopyListener copyListener) {
@@ -486,6 +696,16 @@ public class Reflection {
                     Method setter = targetDesc.getWriteMethod();
                     if (setter == null)
                         continue;
+
+                    if (setter.getAnnotation(DoNotAccept.class) != null) {
+                        continue;
+                    }
+
+                    Method getter = targetDesc.getReadMethod();
+                    if (getter != null && getter.getAnnotation(DoNotAccept.class) != null) {
+                        continue;
+                    }
+
                     try {
                         boolean annotated = (prop.getReadMethod().getAnnotation(DoNotCopy.class) != null);
                         if (!annotated && prop.getWriteMethod() != null) {
@@ -499,7 +719,9 @@ public class Reflection {
                                 }
                                 if (!handled) {
                                     Object value = prop.getReadMethod().invoke(object);
-                                    if (setter.getParameterTypes()[0].isAssignableFrom(prop.getReadMethod().getReturnType())) {
+
+                                    if (!(value instanceof Collection) &&
+                                            setter.getParameterTypes()[0].isAssignableFrom(prop.getReadMethod().getReturnType())) {
                                         setter.invoke(target, value);
                                     } else {
                                         try {

@@ -16,11 +16,20 @@
 
 package net.e6tech.elements.common.interceptor;
 
-import javax.annotation.Nonnull;
+import net.e6tech.elements.common.Tags;
+import org.junit.jupiter.api.Test;
 
+import javax.annotation.Nonnull;
+import javax.xml.datatype.DatatypeFactory;
+import javax.xml.datatype.XMLGregorianCalendar;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Random;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -28,20 +37,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Created by futeh.
  */
+@Tags.Common
 public class InterceptorTest {
+
+    private int a = 0;
 
     @Test
     public void basic() throws Exception {
         Interceptor interceptor2 = new Interceptor();
         AtomicReference<Boolean> atomic = new AtomicReference<>();
-        TestClass testClass = interceptor2.newInstance(TestClass.class, (target,  thisMethod,  args)-> {
-            System.out.print("Intercepted " + thisMethod.getName() + " ... ");
-            Nonnull nonnull = thisMethod.getAnnotation(Nonnull.class);
-            if (thisMethod.getName().equals("methodA")) {
+        TestClass testClass = interceptor2.newInstance(TestClass.class, frame -> {
+            System.out.print("Intercepted " + frame.getMethod().getName() + " ... ");
+            Nonnull nonnull = frame.getMethod().getAnnotation(Nonnull.class);
+            if (frame.getMethod().getName().equals("methodA")) {
                 assertTrue(nonnull != null);
             }
             atomic.set(true);
-            return thisMethod.invoke(target, args);
+            return frame.invoke();
         });
 
         atomic.set(false);
@@ -63,14 +75,14 @@ public class InterceptorTest {
         // testing setting a different handler.
         AtomicReference<Boolean> atomic2 = new AtomicReference<>();
         Interceptor.getInterceptorHandler(testClass);
-        Interceptor.setInterceptorHandler(testClass, (target,  thisMethod,  args)-> {
-            System.out.print("New Handler - Intercepted " + thisMethod.getName() + " ... ");
-            Nonnull nonnull = thisMethod.getAnnotation(Nonnull.class);
-            if (thisMethod.getName().equals("methodA")) {
+        Interceptor.setInterceptorHandler(testClass, frame -> {
+            System.out.print("New Handler - Intercepted " + frame.getMethod().getName() + " ... ");
+            Nonnull nonnull = frame.getMethod().getAnnotation(Nonnull.class);
+            if (frame.getMethod().getName().equals("methodA")) {
                 assertTrue(nonnull != null);
             }
             atomic2.set(true);
-            return thisMethod.invoke(target, args);
+            return frame.invoke();
         });
         atomic2.set(false);
         testClass.methodA();
@@ -90,9 +102,7 @@ public class InterceptorTest {
 
         // testing proxy class caching
         Class proxyClass = testClass.getClass();
-        testClass = interceptor2.newInstance(TestClass.class, (target,  thisMethod,  args)-> {
-            return thisMethod.invoke(target, args);
-        });
+        testClass = interceptor2.newInstance(TestClass.class, CallFrame::invoke);
 
         assertTrue(proxyClass == testClass.getClass());
 
@@ -100,7 +110,7 @@ public class InterceptorTest {
         TestClass clone = Interceptor.cloneProxyObject(testClass);
         assertTrue(Interceptor.getTarget(clone) == Interceptor.getTarget(testClass));
         assertTrue(Interceptor.getInterceptorHandler(clone) == Interceptor.getInterceptorHandler(testClass));
-        Interceptor.setInterceptorListener(clone, (target, method, args, exception) -> { return null; });
+        Interceptor.setInterceptorListener(clone, (frame, th) -> { return null; });
         assertTrue(Interceptor.getInterceptorListener(clone) != null);
         assertTrue(Interceptor.getInterceptorListener(clone) != Interceptor.getInterceptorListener(testClass));
     }
@@ -110,7 +120,7 @@ public class InterceptorTest {
         Interceptor interceptor = new Interceptor();
         TestClass prototype = new TestClass();
         prototype.setValue(10);
-        Class cls = interceptor.newPrototypeClass(TestClass.class, prototype);
+        Class cls = interceptor.newPrototypeClass(TestClass.class, prototype, null);
         TestClass test = (TestClass) cls.newInstance();
         assertTrue(test.getValue() == 10);
         test.setValue(11);
@@ -136,35 +146,112 @@ public class InterceptorTest {
         assertTrue(test.getValue() == 12);
     }
 
-    public static class TestClass {
+    @Test
+    void testPrivateMethod() throws Exception {
+        Interceptor interceptor = new Interceptor();
+        TestClass proxy = interceptor.newInstance(TestClass.class, frame -> {
+            System.out.println("Intercepted method " + frame.getMethod().getName());
+            return frame.invoke();
+        });
 
-        private int value = 0;
+        proxy.methodD("calling method D");
+        proxy.protectedMethod("calling protected method");
+    }
 
-        public int getValue() {
-            return value;
+    @Test
+    void testBootstrapClass() throws Exception {
+        ZonedDateTime zonedDateTime = ZonedDateTime.ofInstant(Instant.now(), ZoneId.systemDefault());
+        XMLGregorianCalendar calendar = DatatypeFactory.newInstance()
+                .newXMLGregorianCalendar(zonedDateTime.getYear(), zonedDateTime.getMonthValue(), zonedDateTime.getDayOfMonth(),
+                        zonedDateTime.getHour(), zonedDateTime.getMinute(), zonedDateTime.getSecond(), zonedDateTime.getNano() / 1000000,
+                        zonedDateTime.getOffset().getTotalSeconds() / 60);
+        Interceptor.getInstance().newInterceptor(calendar, frame -> null );
+    }
+
+    @Test
+    void anonymousClassThreads() throws Exception{
+        long start = System.currentTimeMillis();
+        anonymousClass();
+        System.out.println("" + (System.currentTimeMillis() - start) + "ms");
+
+        List<Thread> threads = new ArrayList<>();
+        for (int i = 0; i < 2000; i++) {
+            threads.add(new Thread(this::anonymousClass));
+        }
+        start = System.currentTimeMillis();
+        for (Thread thread : threads)
+            thread.start();
+
+        for (Thread thread : threads)
+            thread.join();
+        System.out.println("" + (System.currentTimeMillis() - start) + "ms");
+    }
+
+    @Test
+    void anonymousClass() {
+        X target = new X();
+        target.setN(1);
+        Random random = new Random();
+        int n = random.nextInt();
+        Interceptor.getInstance().runAnonymous(target, new X() {{
+            setX(n);
+            setY(n);
+            setZ(n);
+            a = getX();
+        }});
+
+        assertTrue(target.getX() == n);
+        assertTrue(a == target.getX());
+        assertTrue(target.getN() == 1);
+    }
+
+    private static class X extends Y {
+        private int x;
+        private int y;
+        private int z;
+
+        public X() {
+            super();
         }
 
-        public void setValue(int value) {
-            this.value = value;
+        public int getX() {
+            return x;
         }
 
-        public TestClass() {
-            System.out.println("TestClass constructor");
+        public void setX(int x) {
+            this.x = x;
         }
 
-        @Nonnull
-        public void methodA() {
-            System.out.println("methodA");
+        public int getY() {
+            return y;
         }
 
-        public String methodB(String arg) {
-            System.out.println("methodB: " + arg);
-            return arg;
+        public void setY(int y) {
+            this.y = y;
         }
 
-        public String methodC(String arg, int arg2) {
-            System.out.println("methodC: " + arg + ", "+ arg2);
-            return arg;
+        public int getZ() {
+            return z;
+        }
+
+        public void setZ(int z) {
+            this.z = z;
+        }
+    }
+
+    private static class Y {
+        private int n;
+
+        public Y() {
+            setN(10);
+        }
+
+        public int getN() {
+            return n;
+        }
+
+        public void setN(int n) {
+            this.n = n;
         }
     }
 }

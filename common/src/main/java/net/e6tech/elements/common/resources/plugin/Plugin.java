@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,12 @@ package net.e6tech.elements.common.resources.plugin;
 /**
  * Created by futeh.
  */
-@FunctionalInterface
 public interface Plugin {
-    void initialize();
+
+    default boolean isPrototype() {
+        return false;
+    }
+
+    default void initialize(PluginPath path) {
+    }
 }

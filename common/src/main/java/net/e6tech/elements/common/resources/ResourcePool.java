@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ package net.e6tech.elements.common.resources;
 import net.e6tech.elements.common.notification.NotificationCenter;
 import net.e6tech.elements.common.util.SystemException;
 
+import java.lang.reflect.InvocationTargetException;
 import java.util.Optional;
 import java.util.function.Function;
 
@@ -43,7 +44,17 @@ public interface ResourcePool {
 
     <T> T bind(Class<T> cls, T resource) ;  // 1
 
+    @SuppressWarnings("unchecked")
+    default <T> T bind(T resource) {
+        return bind((Class<T>) resource.getClass(), resource);
+    }
+
     <T> T rebind(Class<T> cls, T resource); // 1
+
+    @SuppressWarnings("unchecked")
+    default <T> T rebind(T resource) {
+        return rebind((Class<T>) resource.getClass(), resource);
+    }
 
     <T> T unbind(Class<T> cls); //1
 
@@ -57,11 +68,13 @@ public interface ResourcePool {
 
     default <T> T newInstance(Class<T> cls) {
         try {
-            T instance = cls.newInstance();
+            T instance = cls.getDeclaredConstructor().newInstance();
             inject(instance);
             return instance;
-        } catch (InstantiationException | IllegalAccessException e) {
+        } catch (InstantiationException | IllegalAccessException | NoSuchMethodException e) {
             throw new SystemException(e);
+        } catch (InvocationTargetException e) {
+            throw new SystemException(e.getTargetException());
         }
     }
 

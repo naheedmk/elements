@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -35,8 +35,16 @@ public class JobServer {
     private Map<String, Job> jobs = new LinkedHashMap<>();
     Scheduler scheduler;
 
-    @Inject
     ResourceManager resourceManager;
+
+    public ResourceManager getResourceManager() {
+        return resourceManager;
+    }
+
+    @Inject
+    public void setResourceManager(ResourceManager resourceManager) {
+        this.resourceManager = resourceManager;
+    }
 
     public List<String> listJobs() {
         List<String> list = new ArrayList<>(jobs.keySet().size());
@@ -65,6 +73,7 @@ public class JobServer {
         return scheduler;
     }
 
+    @SuppressWarnings("unchecked")
     public Job registerJob(String name, Object target) {
         Job job = resourceManager.registerBean(name, Job.class);
         job.setJobServer(this);

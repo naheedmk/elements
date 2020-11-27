@@ -33,7 +33,7 @@ public class ImportWorkingKey extends Command {
     protected String doProcess() throws CommandException {
         try {
             AKB akb = simulator.importKey(new AKB(getField(3)), Hex.toBytes(getField(2)));
-            return "21B#" + akb.getKeyBlock() + "#" + akb.getCheckDigit();
+            return "21B#" + akb.getKeyBlock() + "#" + akb.getCheckDigits();
         } catch (Exception e) {
             AtallaSimulator.logger.error("ImportWorkingKey", e);
         }

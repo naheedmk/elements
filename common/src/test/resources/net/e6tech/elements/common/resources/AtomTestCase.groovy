@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import net.e6tech.elements.common.resources.*
-import static org.junit.jupiter.api.Assertions.assertTrue
 
+import net.e6tech.elements.common.resources.AtomTestSample
+import net.e6tech.elements.common.resources.AtomTestSample2
+
+import static org.junit.jupiter.api.Assertions.assertTrue
 
 // use by ProvisionTestCase
 

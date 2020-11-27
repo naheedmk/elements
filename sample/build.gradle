@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ apply plugin: 'application'
 
 dependencies {
     compile project(':common')
+    compile project(':cassandra')
     compile project(':jmx')
     compile project(':persist-hibernate')
     compile project(':jobs')
@@ -24,15 +25,15 @@ dependencies {
     compile project(':network')
     compile project(':web')
 
-    testCompile("org.junit.jupiter:junit-jupiter-api:5.0.0-M4")
-    testCompile("org.junit.platform:junit-platform-launcher:1.0.0-M4")
-    testRuntime("org.junit.jupiter:junit-jupiter-engine:5.0.0-M4")
+    testCompile "org.junit.jupiter:junit-jupiter-api:${junitJupiterVersion}"
+    testCompile "org.junit.platform:junit-platform-launcher:${junitPlatformLauncherVersion}"
+    testRuntime "org.junit.jupiter:junit-jupiter-engine:${junitJupiterVersion}"
 }
 
 uploadArchives.enabled = false
 
 mainClassName = '''net.e6tech.elements.common.launch.Launch \\
-launch="$APP_HOME"/conf/sample.provision.groovy \\
+launch="$APP_HOME"/conf/provisioning/sample/provsioning/sample.groovy \\
 home="$APP_HOME" \\
 end \\
 '''

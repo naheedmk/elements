@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -63,9 +63,9 @@ public class Binding<T> {
         return currentValue;
     }
 
-    public T rebind(T newValue) {
+    public Binding rebind(T newValue) {
         currentValue = resources.rebind(boundClass, newValue);
-        return currentValue;
+        return this;
     }
 
     public T restore() {

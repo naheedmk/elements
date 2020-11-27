@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -34,8 +34,10 @@ public interface ResourceProvider {
     }
 
     default void onOpen(Resources resources) {}
+    default void afterOpen(Resources resources) {}
     default void onCommit(Resources resources) {}
     default void afterCommit(Resources resources) {}
+    default void afterAbort(Resources resources) {}
     default void onAbort(Resources resources) {}
     default void onClosed(Resources resources) {}
     default void onShutdown() {}

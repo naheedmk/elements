@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,8 +15,10 @@ limitations under the License.
 */
 package net.e6tech.elements.web.security.vault.client;
 
-import net.e6tech.elements.common.cache.CacheFacade;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import net.e6tech.elements.common.logging.Logger;
+import net.e6tech.elements.common.resources.Provision;
 import net.e6tech.elements.common.resources.Startable;
 import net.e6tech.elements.common.util.SystemException;
 import net.e6tech.elements.network.restful.RestfulClient;
@@ -27,11 +29,12 @@ import net.e6tech.elements.security.vault.Credential;
 
 import javax.crypto.SecretKey;
 import javax.ws.rs.NotAuthorizedException;
-import java.io.UnsupportedEncodingException;
-import java.net.HttpURLConnection;
+import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.PublicKey;
 import java.security.spec.RSAPublicKeySpec;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 
 import static net.e6tech.elements.security.vault.Constants.mapper;
 
@@ -39,26 +42,26 @@ import static net.e6tech.elements.security.vault.Constants.mapper;
  * Created by futeh.
  */
 public class KeyClient implements Startable {
-
-    private static final String UTF8_ENCODING = "UTF-8";
-
+    private Cache<String, SecretKey> cachedSecretKeys = CacheBuilder.newBuilder()
+            .concurrencyLevel(Provision.cacheBuilderConcurrencyLevel)
+            .initialCapacity(50)
+            .expireAfterWrite(600, TimeUnit.SECONDS)
+            .build();
+    private Cache<String, ClearText> cachedSecrets = CacheBuilder.newBuilder()
+            .concurrencyLevel(Provision.cacheBuilderConcurrencyLevel)
+            .initialCapacity(50)
+            .expireAfterWrite(600, TimeUnit.SECONDS)
+            .build();
     private AsymmetricCipher asym = AsymmetricCipher.getInstance("RSA");
     private SymmetricCipher sym = SymmetricCipher.getInstance("AES");
     private String clientKey;
     private SecretKey secretKey;
-    private PublicKey publicKey;
     private RestfulClient client;
     private String address = "http://localhost:10000/restful/keyserver/v1";
     private Credential credential;
-    private String user;
-    private String obfuscatedPassword;
-    private long renewInterval = 11 * 60000L;
+    private String authorization;
     private boolean started;
     private boolean remoteEncryption = true;
-    private CacheFacade<String, SecretKey> cachedSecretKeys;
-    private CacheFacade<String, ClearText> cachedSecrets;
-
-    private String token;
 
     public String getAddress() {
         return address;
@@ -76,14 +79,6 @@ public class KeyClient implements Startable {
         this.credential = credential;
     }
 
-    public long getRenewInterval() {
-        return renewInterval;
-    }
-
-    public void setRenewInterval(long renewInterval) {
-        this.renewInterval = renewInterval;
-    }
-
     public boolean isRemoteEncryption() {
         return remoteEncryption;
     }
@@ -97,19 +92,14 @@ public class KeyClient implements Startable {
             return;
         started = true;
 
-        cachedSecretKeys = new CacheFacade<String, SecretKey>("secretKeys") {};
-        cachedSecretKeys.initPool();
-
-        cachedSecrets = new CacheFacade<String, ClearText>("secrets") {};
-        cachedSecrets.initPool();
-
-        initialAuthorization();
-        startRenewalThread();
+        initCredential();
     }
 
-    private void initialAuthorization() {
+    @SuppressWarnings("squid:S1181")
+    private void initCredential() {
         client = new RestfulClient();
         client.setAddress(address);
+        PublicKey publicKey;
 
         try {
             net.e6tech.elements.network.restful.Response response = client.get("publicKey");
@@ -120,7 +110,7 @@ public class KeyClient implements Startable {
             clientKey = asym.encrypt(publicKey, secretKey.getEncoded());
         } catch (Throwable e) {
             Logger.suppress(e);
-            throw new NotAuthorizedException("Unable to authenticate with keyserver at " + address);
+            throw new NotAuthorizedException("Unable to authenticate with key server at " + address);
         }
 
         try{
@@ -128,117 +118,53 @@ public class KeyClient implements Startable {
                 credential = new Credential();
             }
             credential.run("Authenticating key client");
-            user = credential.getUser();
-            byte[] buffer = new byte[credential.getPassword().length * 2];
-            char[] chars = credential.getPassword();
-            for(int i=0;i< chars.length;i++) {
-                buffer[i*2] = (byte) (chars[i] >> 8);
-                buffer[i*2+1] = (byte) chars[i];
-            }
-            obfuscatedPassword = sym.encrypt(secretKey, buffer, null);
-            authorize(user, credential.getPassword());
+
+            String encryptedData = asym.encrypt(publicKey, mapper.writeValueAsString(credential).getBytes(StandardCharsets.UTF_8));
+            authorization = sym.encrypt(secretKey, sym.toBytes(encryptedData), null);
         } catch(Exception ex){
             throw new SystemException(ex);
         }
     }
 
-    private void startRenewalThread() {
-        Thread thread = new Thread(()->{
-            while (true) {
-                try {
-                    Thread.sleep(renewInterval);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                try {
-                    renew();
-                } catch (GeneralSecurityException e) {
-                    Logger.suppress(e);
-                    reAuthorize();
-                }
-            }
-        });
-        thread.setDaemon(true);
-        thread.start();
-    }
-
-    protected void reAuthorize() {
-        try {
-            byte[] bytes = sym.decrypt(secretKey, obfuscatedPassword, null);
-            char[] chars = new char[bytes.length/2];
-            for (int i = 0; i < chars.length; i++) {
-                chars[i] = (char) (((bytes[i*2] & 0xff) << 8) + (bytes[i*2+1] & 0xff));
-            }
-            authorize(user, chars);
-        } catch (GeneralSecurityException e1) {
-            throw new SystemException(e1);
-        }
-    }
-
-    protected void authorize(String user, char[] password) throws GeneralSecurityException {
-        Authenticate auth = new Authenticate();
-        auth.setUserName(user);
-        auth.setPassword(password);
-        String ret = submit(auth);
-        byte[] result = decryptResult(ret);
-        try {
-            token = new String(result, UTF8_ENCODING);
-        } catch (UnsupportedEncodingException e) {
-            throw new GeneralSecurityException(e);
-        }
-    }
 
     public boolean isAuthorized() {
-        return (token != null);
-    }
-
-    protected void renew() throws GeneralSecurityException {
-        checkToken();
-        Renew request = new Renew();
-        String ret = submit(request);
-        byte[] result = decryptResult(ret);
-        try {
-            token = new String(result, UTF8_ENCODING);
-        } catch (UnsupportedEncodingException e) {
-            throw new GeneralSecurityException(e);
-        }
+        return (authorization != null);
     }
 
     // for remote calls
     public ClearText getSecret(String alias) throws GeneralSecurityException {
-        checkToken();
-        return cachedSecrets.get(alias, ()-> {
-            GetSecret request = new GetSecret();
-            request.setAlias(alias);
-            String ret = submit(request);
-            return decryptResult(ret, ClearText.class);
-        });
+        checkAuthorize();
+        try {
+            return cachedSecrets.get(alias, ()-> {
+                GetSecret request = new GetSecret();
+                request.setAlias(alias);
+                String ret = submit(request);
+                return decryptResult(ret, ClearText.class);
+            });
+        } catch (ExecutionException e) {
+            throw new GeneralSecurityException(e.getCause());
+        }
     }
 
     // for remote calls
     public ClearText passwordUnlock(String alias) throws GeneralSecurityException {
-        checkToken();
+        checkAuthorize();
         PasswordUnlock request = new PasswordUnlock();
         request.setAlias(alias);
         String ret = submit(request);
         return decryptResult(ret, ClearText.class);
     }
 
-
     // encrypt data with key. key is encrypted with master key.
     public String encrypt(String key, byte[] data, String iv) throws GeneralSecurityException {
         if (remoteEncryption) {
-            checkToken();
+            checkAuthorize();
             Encrypt request = new Encrypt();
             request.setKeyBlock(key);
             request.setData(data);
             request.setIv(iv);
             String ret = submit(request);
-            try {
-                return new String(decryptResult(ret), UTF8_ENCODING);
-            } catch (UnsupportedEncodingException e) {
-                throw new GeneralSecurityException(e);
-            }
+            return new String(decryptResult(ret), StandardCharsets.UTF_8);
         } else {
             SecretKey skey = getSecretKey(key);
             return sym.encrypt(skey, data, iv);
@@ -248,7 +174,7 @@ public class KeyClient implements Startable {
     // for decrypt data
     public byte[] decrypt(String key, String secret, String iv) throws GeneralSecurityException {
         if (remoteEncryption) {
-            checkToken();
+            checkAuthorize();
             Decrypt request = new Decrypt();
             request.setKeyBlock(key);
             request.setSecret(secret);
@@ -261,30 +187,35 @@ public class KeyClient implements Startable {
         }
     }
 
-    private SecretKey getSecretKey(String key) {
-        return cachedSecretKeys.get(key, ()-> {
-            byte[] keyBytes = decrypt(key);
-            return sym.getKeySpec(keyBytes);
-        });
+    private SecretKey getSecretKey(String key) throws GeneralSecurityException {
+        try {
+            return cachedSecretKeys.get(key, ()-> {
+                byte[] keyBytes = decrypt(key);
+                return sym.getKeySpec(keyBytes);
+            });
+        } catch (ExecutionException e) {
+            throw new GeneralSecurityException(e.getCause());
+        }
     }
 
     // for decrypt keys
     public byte[] decrypt(String key) throws GeneralSecurityException {
-        checkToken();
+        checkAuthorize();
         Decrypt request = new Decrypt();
         request.setSecret(key);
         String ret = submit(request);
         return decryptResult(ret);
     }
 
+    @SuppressWarnings("squid:S1181")
     private String submit(Action action) throws GeneralSecurityException {
         Request request = new Request();
         request.setAction(action.getType());
-        if (!(action instanceof Authenticate))
-            action.setToken(token);
+
+        request.setAuthorization(authorization);
         String encryptedData = null;
         try {
-            encryptedData = sym.encrypt(secretKey, mapper.writeValueAsString(action).getBytes(UTF8_ENCODING), null);
+            encryptedData = sym.encrypt(secretKey, mapper.writeValueAsString(action).getBytes(StandardCharsets.UTF_8), null);
         } catch (Exception e) {
             throw new GeneralSecurityException(e);
         }
@@ -295,11 +226,7 @@ public class KeyClient implements Startable {
         try {
             response = client.post("request", request);
             int code = response.getResponseCode();
-            if (code == HttpURLConnection.HTTP_UNAUTHORIZED && !(action instanceof Authenticate)) {
-                reAuthorize();
-                action.setToken(token);
-                response = client.post("request", request);
-            } else if (code < 200 || code > 202) {
+            if (code < 200 || code > 202) {
                 throw new GeneralSecurityException();
             }
         } catch (Throwable e) {
@@ -316,19 +243,15 @@ public class KeyClient implements Startable {
     private <T> T decryptResult(String ret, Class<T> cls) throws GeneralSecurityException {
         byte[] result = sym.decrypt(secretKey, ret, null);
         try {
-            String value = new String(result, "UTF-8");
+            String value = new String(result, StandardCharsets.UTF_8);
             return mapper.readValue(value, cls);
-        } catch (UnsupportedEncodingException e) {
-            // impossible
-            Logger.suppress(e);
-            return null;
         } catch (Exception e) {
             throw new GeneralSecurityException(e);
         }
     }
 
-    private void checkToken() throws GeneralSecurityException {
-        if (token == null)
+    private void checkAuthorize() throws GeneralSecurityException {
+        if (authorization == null)
             throw new GeneralSecurityException("Not authenticated");
     }
 

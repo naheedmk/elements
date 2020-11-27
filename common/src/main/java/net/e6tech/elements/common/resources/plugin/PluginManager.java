@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,26 +20,24 @@ import net.e6tech.elements.common.inject.Injector;
 import net.e6tech.elements.common.inject.Module;
 import net.e6tech.elements.common.inject.ModuleFactory;
 import net.e6tech.elements.common.logging.Logger;
-import net.e6tech.elements.common.resources.Binding;
-import net.e6tech.elements.common.resources.InjectionListener;
-import net.e6tech.elements.common.resources.ResourceManager;
-import net.e6tech.elements.common.resources.Resources;
+import net.e6tech.elements.common.reflection.Reflection;
+import net.e6tech.elements.common.resources.*;
 import net.e6tech.elements.common.util.SystemException;
 import net.e6tech.elements.common.util.file.FileUtil;
 
+import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.net.MalformedURLException;
+import java.lang.reflect.Modifier;
 import java.net.URL;
 import java.net.URLClassLoader;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
+import java.nio.file.Paths;
+import java.util.*;
 
 /**
  * Created by futeh.
  */
-@SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134"})
+@SuppressWarnings({ "squid:S134", "unchecked"})
 public class PluginManager {
 
     private static final String DEFAULT_PLUGIN = "defaultPlugin";
@@ -48,7 +46,7 @@ public class PluginManager {
     private PluginClassLoader classLoader;
     private ResourceManager resourceManager;
     private Resources resources;
-    private Map<String, Object> plugins = new HashMap<>();
+    private Map<PluginPath, Object> plugins = new HashMap<>();
     private Map<Class, Object> defaultPlugins = new HashMap<>();
 
     public PluginManager(ResourceManager resourceManager) {
@@ -61,48 +59,82 @@ public class PluginManager {
         plugin.resources = resources;
         plugin.defaultPlugins = defaultPlugins;
         plugin.classLoader = classLoader;
+        plugin.plugins = plugins;
         return plugin;
+    }
+
+    public Resources getResources() {
+        return resources;
+    }
+
+    public void setResources(Resources resources) {
+        this.resources = resources;
     }
 
     public void loadPlugins(String[] directories) {
         for (String dir: directories) {
-            java.nio.file.Path[] paths = new java.nio.file.Path[0];
+            String[] paths;
             try {
-                paths = FileUtil.listFiles(dir, "jar");
+                paths = FileUtil.listFiles(dir, ".jar");
             } catch (IOException e) {
                 throw new SystemException(e);
             }
-            for (java.nio.file.Path p : paths) {
+            for (String p : paths) {
+                String fullPath;
                 try {
-                    classLoader.addURL(p.toUri().toURL());
-                } catch (MalformedURLException e) {
+                    fullPath = new File(p).getCanonicalPath();
+                } catch (IOException e) {
+                    continue;
+                }
+
+                try {
+                    classLoader.addURL(Paths.get(fullPath).toUri().toURL());
+                } catch (IOException e) {
                     throw new SystemException(e);
                 }
             }
-        };
+        }
     }
 
-    public ClassLoader getPluginClassLoader() {
+    public URLClassLoader getPluginClassLoader() {
         return classLoader;
     }
 
+    @SuppressWarnings({"unchecked", "squid:S3824", "squid:S3776"})
     protected Optional getDefaultPlugin(Class type) {
         Object lookup = defaultPlugins.get(type);
         if (lookup == NULL_OBJECT)
             return Optional.empty();
 
         if (lookup == null) {
-            while (type != null && !type.equals(Object.class)) {
+            Class t = type;
+            while (t != null && !t.equals(Object.class)) {
                 try {
-                    Field field = type.getField(DEFAULT_PLUGIN);
+                    Field field = t.getField(DEFAULT_PLUGIN);
                     lookup = field.get(null);
                     defaultPlugins.put(type, lookup);
                     break;
                 } catch (NoSuchFieldException | IllegalAccessException e1) {
                     Logger.suppress(e1);
                 }
-                type = type.getSuperclass();
+                t = t.getSuperclass();
             }
+            if (lookup == null
+                    && type != null
+                    && !type.isInterface()
+                    && !Modifier.isAbstract(type.getModifiers())
+                    && Modifier.isPublic(type.getModifiers())
+                    && AutoPlugin.class.isAssignableFrom(type)) {
+                try {
+                    // test for existence of zero argument constructor
+                    type.getDeclaredConstructor();
+                    lookup = type;
+                    defaultPlugins.put(type, lookup);
+                } catch (NoSuchMethodException e) {
+                    // ok
+                }
+            }
+
             if (lookup == null)
                 defaultPlugins.put(type, NULL_OBJECT);
         }
@@ -110,36 +142,106 @@ public class PluginManager {
         return Optional.ofNullable(lookup);
     }
 
-    public <T extends Plugin> Optional<T> get(PluginPaths<T> paths, Object ... args) {
-        Object lookup = null;
+    public Map<PluginPath, Object> startsWith(PluginPaths<?> paths) {
+        Map<PluginPath, Object> map = new LinkedHashMap<>();
 
         for (PluginPath path : paths.getPaths()) {
-            String fullPath = path.path();
-            lookup = plugins.get(fullPath);
-            if (lookup != null)
+            for (Map.Entry<PluginPath, Object> entry : plugins.entrySet()) {
+                if (entry.getKey().startsWith(path) && !map.containsKey(entry.getKey()))
+                    map.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return map;
+    }
+
+    public <T extends Plugin> Optional<T> get(PluginPaths<T> paths, Object ... args) {
+        Object lookup = null;
+        PluginPath<T> pluginPath = null;
+
+        // look up from paths
+        for (PluginPath path : paths.getPaths()) {
+            lookup = plugins.get(path);
+            if (lookup != null) {
+                pluginPath = path;
                 break;
+            }
         }
 
+        // if still null, look up from default plugin
         if (lookup == null) {
+            pluginPath = PluginPath.of(paths.getType(), DEFAULT_PLUGIN);
+        }
+        return Optional.ofNullable(createInstance(pluginPath, lookup, args));
+    }
+
+    public <T extends Plugin> T createInstance(PluginPath<T> pluginPath, Object obj, Object ... args) {
+        if (obj == null && pluginPath == null)
+            return null;
+
+        if (obj == null) {
             // get default plugin
-            Optional defaultPlugin = getDefaultPlugin(paths.getType());
+            Optional defaultPlugin = getDefaultPlugin(pluginPath.getType());
             if (!defaultPlugin.isPresent())
-                return Optional.empty();
-            lookup = defaultPlugin.get();
+                return null;
+            obj = defaultPlugin.get();
+            pluginPath = PluginPath.of(pluginPath.getType(), DEFAULT_PLUGIN);
         }
 
         T plugin;
-        if (lookup instanceof Class) {
+        if (obj instanceof Class) {
+            plugin = createFromClass(pluginPath, (Class) obj, args);
+        } else if (obj instanceof PluginFactory) {
+            plugin = createFromFactory(pluginPath, (PluginFactory) obj, args);
+        } else {
+            plugin = createFromInstance(pluginPath, obj, args);
+        }
+        return plugin;
+    }
+
+    private  <T extends Plugin> T createFromClass(PluginPath<T> pluginPath, Class cls, Object ... args) {
+        try {
+            T plugin =  (T) cls.getDeclaredConstructor().newInstance();
+            plugin.initialize(pluginPath);
+            inject(plugin, args);
+            return plugin;
+        } catch (Exception e) {
+            throw new SystemException(e);
+        }
+    }
+
+    private  <T extends Plugin> T createFromFactory(PluginPath<T> pluginPath, PluginFactory factory, Object ... args) {
+        T plugin = factory.create(this);
+        plugin.initialize(pluginPath);
+        inject(plugin, args);
+        return plugin;
+    }
+
+    private  <T extends Plugin> T createFromInstance(PluginPath<T> pluginPath, Object obj, Object ... args) {
+        T plugin;
+        T prototype = (T) obj;
+        if (prototype instanceof Prototype) {
+            plugin = (T) ((Prototype) prototype).newInstance();
+            plugin.initialize(pluginPath);
+            inject(plugin, args);
+        } else if (prototype.isPrototype()) {
             try {
-                plugin = (T) ((Class) lookup).newInstance();
+                plugin = (T) prototype.getClass().getDeclaredConstructor().newInstance();
+                Reflection.copyInstance(plugin, prototype);
+                plugin.initialize(pluginPath);
+                inject(plugin, args);
             } catch (Exception e) {
                 throw new SystemException(e);
             }
         } else {
-            plugin = (T) lookup;
+            // this is a singleton, no need to initialize and inject.
+            plugin = prototype;
         }
+        return plugin;
+    }
 
-        if (args != null && args.length > 0) {
+    @SuppressWarnings("squid:S3776")
+    public void inject(Object instance, Object ... args) {
+        if (instance != null && args != null && args.length > 0) {
             ModuleFactory factory = (resources != null) ? resources.getModule().getFactory() :
                     resourceManager.getModule().getFactory();
             Module module = factory.create();
@@ -159,17 +261,18 @@ public class PluginManager {
             Injector injector = (resources != null) ?
                     module.build(resources.getModule(), resourceManager.getModule())
                     : module.build(resourceManager.getModule());
-            if (plugin instanceof InjectionListener) {
-                ((InjectionListener) plugin).preInject(resources);
+            InjectionListener injectionListener = null;
+            ResourcePool resourcePool = (resources != null) ? resources : resourceManager;
+            if (instance instanceof InjectionListener) {
+                injectionListener = (InjectionListener) instance;
+                injectionListener.preInject(resourcePool);
             }
-            injector.inject(plugin);
-            if (plugin instanceof InjectionListener) {
-                ((InjectionListener) plugin).injected(resources);
-            }
+            injector.inject(instance, true);
+            if (injectionListener != null)
+                injectionListener.injected(resourcePool);
+        } else if (instance != null && resources != null) {
+            resources.inject(instance);
         }
-
-        plugin.initialize();
-        return Optional.of((T)plugin);
     }
 
     public <T extends Plugin> Optional<T> get(PluginPath<T> path, Object ... args) {
@@ -177,15 +280,23 @@ public class PluginManager {
     }
 
     public synchronized <T extends Plugin> void add(PluginPath<T> path, Class<T> cls) {
-        plugins.put(path.path(), cls);
+        plugins.put(path, cls);
     }
 
-    public synchronized <T extends Plugin> void add(PluginPath<T> path, T object) {
-        plugins.put(path.path(), object);
+    public synchronized <T extends Plugin> void add(PluginPath<T> path, T singleton) {
+        plugins.put(path, singleton);
+        resourceManager.inject(singleton, !singleton.isPrototype());
+        singleton.initialize(path);
     }
 
-    public synchronized <T extends Plugin, U extends T> void addDefault(Class<T> cls, U object) {
-        defaultPlugins.put(cls, object);
+    public synchronized <T extends Plugin> Object remove(PluginPath<T> path) {
+        return plugins.remove(path);
+    }
+
+    public synchronized <T extends Plugin, U extends T> void addDefault(Class<T> cls, U singleton) {
+        defaultPlugins.put(cls, singleton);
+        resourceManager.inject(singleton, !singleton.isPrototype());
+        singleton.initialize(PluginPath.of(cls, DEFAULT_PLUGIN));
     }
 
     public synchronized <T extends Plugin, U extends T> void addDefault(Class<T> cls, Class<U> implClass) {
@@ -198,6 +309,8 @@ public class PluginManager {
 
     public static class PluginClassLoader extends URLClassLoader {
 
+        private List<URL> pluginURLs = new ArrayList<>();
+
         public PluginClassLoader(ClassLoader parent) {
             super(new URL[0], parent);
         }
@@ -205,6 +318,11 @@ public class PluginManager {
         @Override
         public void addURL(URL url) {
             super.addURL(url);
+            pluginURLs.add(url);
+        }
+
+        public URL[] getPluginURLs() {
+            return pluginURLs.toArray(new URL[0]);
         }
 
     }

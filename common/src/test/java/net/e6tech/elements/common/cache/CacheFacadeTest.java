@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,27 +15,26 @@
  */
 package net.e6tech.elements.common.cache;
 
+import net.e6tech.elements.common.Tags;
 import org.ehcache.Cache;
 import org.ehcache.CacheManager;
 import org.ehcache.config.builders.CacheConfigurationBuilder;
 import org.ehcache.config.builders.CacheManagerBuilder;
+import org.ehcache.config.builders.ExpiryPolicyBuilder;
 import org.ehcache.config.builders.ResourcePoolsBuilder;
-import org.ehcache.expiry.Duration;
-import org.ehcache.expiry.Expirations;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Tests for ehcache and CacheFacade.
  * Created by futeh.
  */
+@Tags.Common
 public class CacheFacadeTest {
     @Test
     public void basic() {
@@ -43,7 +42,7 @@ public class CacheFacadeTest {
                 = CacheManagerBuilder.newCacheManagerBuilder()
                 .withCache("preConfigured",
                         CacheConfigurationBuilder.newCacheConfigurationBuilder(Long.class, String.class, ResourcePoolsBuilder.heap(10))
-                                .withExpiry(Expirations.timeToLiveExpiration(Duration.of(20, TimeUnit.SECONDS))))
+                                .withExpiry(ExpiryPolicyBuilder.timeToLiveExpiration(Duration.ofSeconds(20))))
                 .build();
 
         cacheManager.init();
@@ -91,7 +90,7 @@ public class CacheFacadeTest {
     public void facade() {
         CacheFacade<Long, Map<String, String>> facade = new CacheFacade<Long, Map<String, String>>("facade") {};
         System.out.println(facade.getClass());
-        facade.pool = new CacheConfiguration();
+        facade.setCacheConfiguration(new CacheConfiguration());
 
         Map<String, String> value = facade.get(1L, ()-> new HashMap<String, String>());
         System.out.println(value);

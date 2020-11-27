@@ -18,6 +18,7 @@ package net.e6tech.elements.security.hsm.atalla.simulator;
 
 import net.e6tech.elements.common.logging.Logger;
 import net.e6tech.elements.security.Hex;
+import net.e6tech.elements.security.hsm.Simulator;
 import net.e6tech.elements.security.hsm.atalla.Message;
 
 import javax.crypto.Cipher;
@@ -26,29 +27,23 @@ import javax.crypto.spec.SecretKeySpec;
 import java.io.*;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
-import java.net.ServerSocket;
-import java.net.Socket;
 import java.security.GeneralSecurityException;
-import java.util.Arrays;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 
 /**
  * Created by futeh.
  */
-@SuppressWarnings("squid:S3008")
-public class AtallaSimulator {
+@SuppressWarnings({"squid:S3008", "squid:S2278"})
+public class AtallaSimulator extends Simulator {
 
     static String MASTER_KEY = "2ABC3DEF4567018998107645FED3CBA20123456789ABCDEF";
 
     // test keys
-    static String  IMK_ARQC = "1mENN000,5555 5555 5555 5555 6666 6666 6666 6666";
-    static String  IMK_SM_MAC = "1mENN00M,ABCD ABCD EF01 EF01 10FE 10FE DCBA DCBA";
-    static String  IMK_SM_ENC = "1mENN00E,1234 1234 5678 5678 8765 8765 4321 4321";
-
+    static String IMK_ARQC = "1mENE000,0123 4567 89AB CDEF FEDC BA98 7654 3210";
+    static String IMK_SM_MAC = "1mENN00M,ABCD ABCD EF01 EF01 10FE 10FE DCBA DCBA";
+    static String IMK_SM_ENC = "1mENN00E,1234 1234 5678 5678 8765 8765 4321 4321";
     static String KPV_VISA = "1VVNE000,3333 3333 3333 3333 4444 4444 4444 4444";
     static String KPV_IBM3624 = "1V3NE000,3333 3333 3333 3333 4444 4444 4444 4444";
     static String KPE_INTERCHANGE = "1PUNE000,5555 5555 5555 5555 6666 6666 6666 6666";
@@ -59,12 +54,8 @@ public class AtallaSimulator {
 
     static Logger logger = Logger.getLogger();
 
-    private ExecutorService threadPool;
-    private ServerSocket serverSocket;
-    private int port = 7000;
     private byte[] masterKey = Hex.toBytes(MASTER_KEY); // triple des is 24 bytes,
-    private boolean stopped = true;
-    protected Map<String, String> keys = new HashMap<>();
+    protected Map<String, String> keys = new LinkedHashMap<>();
 
     public AtallaSimulator() throws GeneralSecurityException {
         Field[] fields = AtallaSimulator.class.getDeclaredFields();
@@ -73,12 +64,16 @@ public class AtallaSimulator {
                     && f.getType().isAssignableFrom(String.class)) {
                 f.setAccessible(true);
                 try {
-                    keys.put(f.getName(), (String) f.get(null));
+                    String value = (String) f.get(null);
+                    String[] keyComponents = value.split(",");
+                    if (keyComponents.length == 2)
+                        keys.put(f.getName(), value);
                 } catch (IllegalAccessException e) {
                     Logger.suppress(e);
                 }
             }
         }
+        setPort(7000);
     }
 
     public String getMasterKey() {
@@ -146,73 +141,39 @@ public class AtallaSimulator {
         return asAKB(header, plainKey);
     }
 
-    public boolean isStopped() {
-        return stopped;
-    }
-
-    public void start() {
-        if (threadPool == null) {
-            ThreadGroup group = Thread.currentThread().getThreadGroup();
-            threadPool = Executors.newCachedThreadPool(runnable -> {
-                Thread thread = new Thread(group, runnable, "AtallaSimulator");
-                thread.setName("AtallaSimulator-" + thread.getId());
-                thread.setDaemon(true);
-                return thread;
-            });
-        }
-        Thread thread = new Thread(this::startServer);
-        thread.start();
-    }
-
-    @SuppressWarnings({"squid:S134", "squid:S1141"})
-    protected void startServer() {
-        try {
-            serverSocket = new ServerSocket(port);
-            stopped = false;
-            while (! stopped) {
-                final Socket socket = serverSocket.accept();
-                threadPool.execute(()-> {
-                    try {
-                        try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-                             PrintWriter writer =  new PrintWriter(new OutputStreamWriter(socket.getOutputStream()))) {
-                            String line;
-                            while ((line = reader.readLine()) != null) {
-                                line = line.trim();
-                                Command request = Command.createInstance(line, this);
-                                Message response = request.process();
-                                writer.println(response);
-                                writer.flush();
-                            }
-                            logger.info("Atalla client exited");
-                        }
-                    } catch (IOException e) {
-                        logger.trace(e.getMessage(), e);
-                    }
-                });
+    protected void process(InputStream inputStream, OutputStream outputStream) throws IOException {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
+             PrintWriter writer =  new PrintWriter(new OutputStreamWriter(outputStream))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                Command request = Command.createInstance(line, this);
+                Message response = request.process();
+                writer.println(response);
+                writer.flush();
             }
-        } catch (Exception th) {
-            throw logger.systemException(th);
+            logger.info("{} client exited", getClass().getSimpleName());
         }
     }
 
-    public void stop() {
-        if (serverSocket != null) {
-            try {
-                serverSocket.close();
-            } catch (IOException e) {
-                Logger.suppress(e);
-            } finally {
-                stopped = true;
-            }
-        }
-    }
-
+    @SuppressWarnings("squid:S106")
     public static void main(String ... args) throws Exception  {
-        byte[] kekKey = Hex.toBytes("0123456789ABCDEFFEDCBA9876543210");
-        String header = "1KDEE000";
-        AtallaSimulator atalla = (new AtallaSimulator());
-        AKB akb = new AKB(header, atalla.masterKey, kekKey);
-        byte[] recoveredKek = akb.decryptKey(atalla.masterKey);
-        logger.info(Boolean.toString(Arrays.equals(kekKey, recoveredKek)));
+        AtallaSimulator simulator = new AtallaSimulator();
+        for (String keyType : simulator.keys.keySet()) {
+            AKB akb = simulator.getKey(keyType);
+            String headerAndKey = simulator.keys.get(keyType);
+            String[] fields = headerAndKey.split(",");
+            System.out.println("Key: " + keyType);
+            System.out.println("Key 1: " + fields[1]);
+            System.out.println("Check Digits: " + akb.getCheckDigits());
+            System.out.println();
+        }
+
+        AKB akb = simulator.asAKB("1mENE000,9E15204313F7318A CB79B90BD986AD29");
+        System.out.println("Key: " + "9E15204313F7318A CB79B90BD986AD29");
+        System.out.println("Check Digits: " + akb.getCheckDigits());
+        System.out.println();
+
+        simulator.start();
     }
 }

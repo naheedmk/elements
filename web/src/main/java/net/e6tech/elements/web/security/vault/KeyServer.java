@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,10 +15,12 @@ limitations under the License.
 */
 package net.e6tech.elements.web.security.vault;
 
+import com.google.common.cache.CacheBuilder;
+import com.google.common.cache.CacheLoader;
+import com.google.common.cache.LoadingCache;
 import net.e6tech.elements.common.inject.Inject;
 import net.e6tech.elements.common.logging.Logger;
 import net.e6tech.elements.common.resources.Provision;
-import net.e6tech.elements.common.cache.CacheFacade;
 import net.e6tech.elements.common.util.SystemException;
 import net.e6tech.elements.security.vault.ClearText;
 import net.e6tech.elements.security.vault.Credential;
@@ -32,7 +34,9 @@ import javax.security.auth.login.LoginException;
 import javax.ws.rs.*;
 import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
+import java.nio.charset.StandardCharsets;
 import java.security.spec.RSAPublicKeySpec;
+import java.util.concurrent.TimeUnit;
 
 import static net.e6tech.elements.security.vault.Constants.mapper;
 
@@ -43,15 +47,45 @@ import static net.e6tech.elements.security.vault.Constants.mapper;
 public class KeyServer {
 
     private static Logger logger = Logger.getLogger();
+    private VaultManager vaultManager;
+    private Provision provision;
+    private LoadingCache<String, SecretKey> clientKeys = CacheBuilder.newBuilder()
+            .maximumSize(1000)
+            .initialCapacity(20)
+            .expireAfterWrite(60 * 60 * 1000L, TimeUnit.MILLISECONDS)
+            .concurrencyLevel(Provision.cacheBuilderConcurrencyLevel)
+            .build(new CacheLoader<String, SecretKey>() {
+                public SecretKey load(String clientKey) throws Exception {
+                    byte[] decrypted = vaultManager.decryptPrivate(clientKey);
+                    return new SecretKeySpec(decrypted, vaultManager.getSymmetricCipher().getAlgorithm());
+                }
+            });
+
+    public VaultManager getVaultManager() {
+        return vaultManager;
+    }
 
     @Inject
-    VaultManager vaultManager;
+    public void setVaultManager(VaultManager vaultManager) {
+        this.vaultManager = vaultManager;
+    }
+
+    public Provision getProvision() {
+        return provision;
+    }
 
     @Inject
-    Provision provision;
+    public void setProvision(Provision provision) {
+        this.provision = provision;
+    }
 
-    @Inject
-    CacheFacade<String, SecretKey> clientKeys;
+    public LoadingCache<String, SecretKey> getClientKeys() {
+        return clientKeys;
+    }
+
+    public void setClientKeys(LoadingCache<String, SecretKey> clientKeys) {
+        this.clientKeys = clientKeys;
+    }
 
     @GET
     @Produces({MediaType.APPLICATION_JSON})
@@ -73,6 +107,7 @@ public class KeyServer {
         }
     }
 
+    @SuppressWarnings("unchecked")
     @POST
     @Produces(MediaType.APPLICATION_JSON)
     @Consumes(MediaType.APPLICATION_JSON)
@@ -81,60 +116,60 @@ public class KeyServer {
         String clsName = Action.class.getPackage().getName() + "." + request.getAction();
         Action action = null;
         SecretKey clientKey = null;
+        Credential credential = null;
         try {
-            clientKey  = clientKeys.get(request.getClientKey(), () -> {
-                byte[] decrypted = vaultManager.decryptPrivate(request.getClientKey());
-                return new SecretKeySpec(decrypted, vaultManager.getSymmetricCipher().getAlgorithm());
-            });
-
+            // decrypt client key
+            clientKey = clientKeys.get(request.getClientKey());
             byte[] decrypted = vaultManager.getSymmetricCipher().decrypt(clientKey, request.getEncryptedData(), null);
-            String encoded = new String(decrypted, "UTF-8");
+            String encoded = new String(decrypted, StandardCharsets.UTF_8);
             Class requestClass = getClass().getClassLoader().loadClass(clsName);
             action = (Action) mapper.readValue(encoded, requestClass);
+
+            // decrypt credential
+            decrypted = vaultManager.getSymmetricCipher().decrypt(clientKey, request.getAuthorization(), null);
+            decrypted = vaultManager.decryptPrivate(vaultManager.getSymmetricCipher().toString(decrypted));
+            credential = mapper.readValue(new String(decrypted, StandardCharsets.UTF_8), Credential.class);
         } catch (Exception e) {
             logger.debug(e.getMessage(), e);
         }
 
+        if (credential == null)
+            throw new NotAuthorizedException(Response.status(Response.Status.UNAUTHORIZED).build());
+
         String value = null;
         try {
-            if (action instanceof Authenticate) {
-                Authenticate auth = (Authenticate) action;
-                value = vaultManager.authorize(new Credential(auth.getUserName(), auth.getPassword()));
-            } else if (action instanceof Renew) {
-                Renew renew = (Renew) action;
-                value = vaultManager.renew(renew.getToken());
-            } else if (action instanceof GetSecret) {
+            if (action instanceof GetSecret) {
                 GetSecret getSecret = (GetSecret) action;
-                ClearText ct = vaultManager.getSecretData(getSecret.getToken(), getSecret.getAlias());
+                ClearText ct = vaultManager.getSecretData(credential, getSecret.getAlias());
                 value = mapper.writeValueAsString(ct);
             } else if (action instanceof PasswordUnlock) {
                 PasswordUnlock unlock = (PasswordUnlock) action;
-                ClearText ct = vaultManager.passphraseUnlock(unlock.getToken(), unlock.getAlias());
+                ClearText ct = vaultManager.passphraseUnlock(credential, unlock.getAlias());
                 value = mapper.writeValueAsString(ct);
             } else if (action instanceof Encrypt) {
                 Encrypt encrypt = (Encrypt) action;
-                value = vaultManager.encrypt(encrypt.getToken(), encrypt.getKeyBlock(), encrypt.getData(), encrypt.getIv());
+                value = vaultManager.encrypt(credential, encrypt.getKeyBlock(), encrypt.getData(), encrypt.getIv());
             } else if (action instanceof Decrypt) {
                 Decrypt decrypt = (Decrypt) action;
                 byte[] result;
                 if (decrypt.getKeyBlock() == null) {
-                    result = vaultManager.decrypt(decrypt.getToken(), decrypt.getSecret());
+                    result = vaultManager.decrypt(credential, decrypt.getSecret());
                 } else {
-                    result = vaultManager.decrypt(decrypt.getToken(), decrypt.getKeyBlock(), decrypt.getSecret(), decrypt.getIv());
+                    result = vaultManager.decrypt(credential, decrypt.getKeyBlock(), decrypt.getSecret(), decrypt.getIv());
                 }
                 return vaultManager.getSymmetricCipher().encrypt(clientKey, result, null);
             } else {
                 throw new SystemException("Unsupported action " + action);
             }
+            credential.clear();
 
-            return vaultManager.getSymmetricCipher().encrypt(clientKey, value.getBytes("UTF-8"), null);
+            return vaultManager.getSymmetricCipher().encrypt(clientKey, value.getBytes(StandardCharsets.UTF_8), null);
         } catch (LoginException ex) {
             logger.warn("" + action, ex);
             throw new NotAuthorizedException(Response.status(Response.Status.UNAUTHORIZED).build());
         } catch(RuntimeException ex) {
             throw ex;
         }  catch (Exception ex) {
-            logger.warn("" + action, ex);
             throw new SystemException(ex);
         }
     }

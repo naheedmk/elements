@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package net.e6tech.elements.persist.criteria;
 
 import net.e6tech.elements.common.interceptor.Interceptor;
 import net.e6tech.elements.common.interceptor.InterceptorHandler;
+import net.e6tech.elements.common.reflection.Primitives;
 import net.e6tech.elements.common.reflection.Reflection;
 
 import javax.persistence.criteria.*;
@@ -30,6 +31,7 @@ import java.util.function.Consumer;
 /**
  * Created by futeh.
  */
+@SuppressWarnings("unchecked")
 public class Statement<T> {
     Where<T> where;
     From<T, T> from;
@@ -56,7 +58,8 @@ public class Statement<T> {
     }
 
     public void or(Runnable runnable) {
-        Where wh = new Where(this.where, this.where.getPath());
+        Where<T> wh = new Where(this.where, this.where.getPath());
+        wh.setTemplate(this.where.getTemplate());
         Interceptor.setInterceptorHandler(wh.getTemplate(), wh);
         wh.predicates = new ArrayList<>();
         runnable.run();
@@ -123,24 +126,24 @@ public class Statement<T> {
     }
 
     protected InterceptorHandler getter(Consumer<Path> consumer) {
-        return (target, thisMethod, args) -> {
-            PropertyDescriptor desc = Reflection.propertyDescriptor(thisMethod);
+        return frame -> {
+            PropertyDescriptor desc = Reflection.propertyDescriptor(frame.getMethod());
             String property = desc.getName();
-            if (thisMethod.equals(desc.getReadMethod())) {
+            if (frame.getMethod().equals(desc.getReadMethod())) {
                 consumer.accept(where.getPath().get(property));
             } else {
                 throw new UnsupportedOperationException("Only accepts getter");
             }
-            return null;
+            return Primitives.defaultValue(desc.getPropertyType());
         };
     }
 
     private InterceptorHandler setter(BiConsumer<Path, Object[]> consumer) {
-        return (target, thisMethod, args) -> {
-            PropertyDescriptor desc = Reflection.propertyDescriptor(thisMethod);
+        return frame -> {
+            PropertyDescriptor desc = Reflection.propertyDescriptor(frame.getMethod());
             String property = desc.getName();
-            if (!thisMethod.equals(desc.getReadMethod())) {
-                consumer.accept(where.getPath().get(property), args);
+            if (!frame.getMethod().equals(desc.getReadMethod())) {
+                consumer.accept(where.getPath().get(property), frame.getArguments());
             } else {
                 throw new UnsupportedOperationException("Only accepts setter");
             }

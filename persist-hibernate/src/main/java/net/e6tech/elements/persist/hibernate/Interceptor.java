@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -34,8 +34,6 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
 
 
 /**
@@ -43,30 +41,44 @@ import java.util.stream.Collectors;
  */
 public class Interceptor extends EmptyInterceptor implements PersistenceInterceptor {
 
-    // below @Inject happens during HibernateEntityManagerProvider.onOpen(Resources resources)
-
-    @Inject(optional = true)
-    protected transient Resources resources;
-
-    @Inject(optional = true)
-    protected transient SessionFactoryImplementor sessionFactory;
-
-    @Inject(optional = true)
-    protected transient NotificationCenter center;
+    private static final long serialVersionUID = 2386314971138960957L;
+    // below @Inject happens during HibernateEntityManagerProvider.afterOpen(Resources resources)
+    private transient Resources resources;
+    private transient SessionFactoryImplementor sessionFactory;
+    private transient NotificationCenter notificationCenter;
 
     public Resources getResources() {
         return resources;
     }
 
+    @Inject(optional = true)
     @Override
     public void setResources(Resources resources) {
         this.resources = resources;
     }
 
+    public SessionFactoryImplementor getSessionFactory() {
+        return sessionFactory;
+    }
+
+    @Inject(optional = true)
+    public void setSessionFactory(SessionFactoryImplementor sessionFactory) {
+        this.sessionFactory = sessionFactory;
+    }
+
+    public NotificationCenter getNotificationCenter() {
+        return notificationCenter;
+    }
+
+    @Inject(optional = true)
+    public void setNotificationCenter(NotificationCenter notificationCenter) {
+        this.notificationCenter = notificationCenter;
+    }
+
     public void cleanup(Resources resources) {
         this.resources = null;
         this.sessionFactory = null;
-        this.center = null;
+        this.notificationCenter = null;
     }
 
     @Override
@@ -154,13 +166,11 @@ public class Interceptor extends EmptyInterceptor implements PersistenceIntercep
             }
         }
         if (listeners != null) {
-            // this can be parallelized.
             try {
                 long start = System.currentTimeMillis();
-                listeners.stream()
-                        .map(listener -> CompletableFuture.runAsync(listener::preFlush))
-                        .collect(Collectors.toList())
-                        .forEach(CompletableFuture::join);
+                for (PersistenceListener p : listeners) {
+                    p.preFlush();
+                }
                 Watcher.addGracePeriod(System.currentTimeMillis() - start);
             } catch (Exception e) {
                 throw new SystemException(e);
@@ -181,7 +191,7 @@ public class Interceptor extends EmptyInterceptor implements PersistenceIntercep
     @SuppressWarnings("squid:CommentedOutCodeLine")
     protected void publishCollectionChanged(Object collection) {
 
-        if (center != null && collection instanceof PersistentCollection) {
+        if (notificationCenter != null && collection instanceof PersistentCollection) {
             PersistentCollection coll = (PersistentCollection) collection;
             boolean cached = false;
             if (sessionFactory != null) {
@@ -196,7 +206,7 @@ public class Interceptor extends EmptyInterceptor implements PersistenceIntercep
             if (cached) {
                 // publisher.publish(EntityManagerProvider.CACHE_EVICT_COLLECTION_REGION, coll.getRole());
                 // center.fireNotification(new EvictCollectionRegion(coll.getRole()));
-                center.publish(EvictCollectionRegion.class, new EvictCollectionRegion(coll.getRole()));
+                notificationCenter.publish(EvictCollectionRegion.class, new EvictCollectionRegion(coll.getRole()));
             }
         }
     }
@@ -204,13 +214,13 @@ public class Interceptor extends EmptyInterceptor implements PersistenceIntercep
     @SuppressWarnings("squid:CommentedOutCodeLine")
     protected void publishEntityChanged(Object entity, Serializable key) {
         boolean cached = false;
-        if (center != null) {
+        if (notificationCenter != null) {
             if (sessionFactory != null) {
-                cached = sessionFactory.getMetamodel().locateEntityPersister(entity.getClass()).hasCache();
+                cached = sessionFactory.getMetamodel().locateEntityPersister(entity.getClass()).canWriteToCache();
             }
             if (cached) {
                 // center.fireNotification(new EvictEntity(this, new ObjectReference(entity.getClass(), key)));
-                center.publish(EvictEntity.class, new EvictEntity(new ObjectReference(entity.getClass(), key)));
+                notificationCenter.publish(EvictEntity.class, new EvictEntity(new ObjectReference(entity.getClass(), key)));
             }
         }
     }

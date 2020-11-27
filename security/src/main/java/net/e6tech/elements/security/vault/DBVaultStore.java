@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static net.e6tech.elements.security.vault.Constants.mapper;
 
@@ -84,9 +85,7 @@ public class DBVaultStore implements VaultStore {
         if (vaultNames == null)
             return this;
         for (String vaultName : vaultNames) {
-            if (vaults.get(vaultName) == null) {
-                vaults.put(vaultName, new DBVault(vaultName));
-            }
+            vaults.computeIfAbsent(vaultName, key -> new DBVault(vaultName));
         }
         return this;
     }
@@ -190,7 +189,7 @@ public class DBVaultStore implements VaultStore {
 
     @Override
     public void close() throws IOException {
-        if (dataSource != null && dataSource instanceof Closeable) {
+        if (dataSource instanceof Closeable) {
             Closeable closeable = (Closeable) dataSource;
             closeable.close();
         }
@@ -250,10 +249,11 @@ public class DBVaultStore implements VaultStore {
     }
 
     private class DBVault implements Vault {
-        List<Secret> addedSecrets = new ArrayList<>();
+        List<Secret> addedSecrets = Collections.synchronizedList(new ArrayList<>());
         String name;
-        Map<String, SortedMap<String, Secret>> cache = new HashMap<>();
-        Map<String, LatestSecret> latestSecret = new Hashtable<>();
+        Map<String, SortedMap<String, SecretEntry>> cache = new HashMap<>();
+        Map<String, SecretEntry> latestSecrets = new ConcurrentHashMap<>();
+        volatile long lastTrim = System.currentTimeMillis();
 
         DBVault(String name) {
             this.name = name;
@@ -268,24 +268,27 @@ public class DBVaultStore implements VaultStore {
         public Secret getSecret(String alias, String version) {
             if (version != null) {
                 synchronized (cache) {
-                    SortedMap<String, Secret> versions = cache.get(alias);
+                    SortedMap<String, SecretEntry> versions = cache.get(alias);
                     if (versions != null) {
-                        Secret secret = versions.get(version);
-                        if (secret != null)
-                            return secret;
+                        SecretEntry l = versions.get(version);
+                        if (l != null && l.timestamp > System.currentTimeMillis() - latestRefreshPeriod) {
+                            trimCache();
+                            return l.secret;
+                        }
                     }
                 }
             } else {
-                LatestSecret l = latestSecret.get(alias);
+                SecretEntry l = latestSecrets.get(alias);
                 if (l != null && l.timestamp > System.currentTimeMillis() - latestRefreshPeriod) {
+                    trimCache();
                     return l.secret;
                 }
             }
 
-            Secret secret = null;
+            Secret secret;
             try {
                 secret = getRetry().retry(() -> {
-                    Secret ret = null;
+                    Secret ret;
                     Connection connection = null;
                     PreparedStatement select = null;
                     ResultSet rs = null;
@@ -293,7 +296,7 @@ public class DBVaultStore implements VaultStore {
                         connection = dataSource.getConnection();
                         if (version != null) {
                             select = connection.prepareStatement("select v.secret from " + tableName + " v where v.name = ? and v.alias = ? and v.version = ? ");
-                            select.setLong(3, new Long(version));
+                            select.setLong(3, Long.parseLong(version));
                         } else {
                             select = connection.prepareStatement("select v.secret from " + tableName + " v where v.name = ? and v.alias = ? " +
                                     "and v.version = (select max(v1.version) from " + tableName + " v1 where v1.name = ? and v1.alias = ?)");
@@ -340,6 +343,7 @@ public class DBVaultStore implements VaultStore {
             if (version == null) {
                 updateLatest(secret);
             }
+            trimCache();
             return secret;
         }
 
@@ -348,6 +352,20 @@ public class DBVaultStore implements VaultStore {
             addedSecrets.add(secret);
             updateCache(secret);
             updateLatest(secret);
+            trimCache();
+        }
+
+        private void trimCache() {
+            if (lastTrim < System.currentTimeMillis() - latestRefreshPeriod) {
+                synchronized (cache) {
+                    for (SortedMap<String, SecretEntry> versions : cache.values()) {
+                        versions.entrySet().removeIf(e -> e.getValue().timestamp < System.currentTimeMillis() - latestRefreshPeriod);
+                    }
+                    cache.entrySet().removeIf(e -> e.getValue().isEmpty());
+                }
+                latestSecrets.entrySet().removeIf(e -> e.getValue().timestamp < System.currentTimeMillis() - latestRefreshPeriod);
+                lastTrim = System.currentTimeMillis();
+            }
         }
 
         @SuppressWarnings("squid:MethodCyclomaticComplexity")
@@ -367,7 +385,7 @@ public class DBVaultStore implements VaultStore {
                             removeVersion = connection.prepareStatement("delete from " + tableName + " where name = ? and alias = ? and version = ? ");
                             removeVersion.setString(1, name);
                             removeVersion.setString(2, alias);
-                            removeVersion.setLong(3, new Long(version));
+                            removeVersion.setLong(3, Long.parseLong(version));
                             removeAll.executeUpdate();
                         } else {
                             removeAll = connection.prepareStatement("delete from " + tableName + " where name = ? and alias = ?");
@@ -408,7 +426,7 @@ public class DBVaultStore implements VaultStore {
             }
 
             synchronized (cache) {
-                SortedMap<String, Secret> versions = cache.get(alias);
+                SortedMap<String, SecretEntry> versions = cache.get(alias);
                 if (versions != null) {
                     if (version == null)
                         cache.remove(alias);
@@ -417,11 +435,11 @@ public class DBVaultStore implements VaultStore {
                 }
             }
 
-            synchronized (latestSecret) {
-                LatestSecret latest = latestSecret.get(alias);
+            synchronized (latestSecrets) {
+                SecretEntry latest = latestSecrets.get(alias);
                 if (latest != null) {
                     if (version == null || version.equals(latest.secret.version()))
-                        latestSecret.remove(alias);
+                        latestSecrets.remove(alias);
                 }
             }
         }
@@ -430,19 +448,19 @@ public class DBVaultStore implements VaultStore {
             if (secret == null)
                 return;
             synchronized (cache) {
-                SortedMap<String, Secret> versions = cache.get(secret.alias());
+                SortedMap<String, SecretEntry> versions = cache.get(secret.alias());
                 if (versions == null) {
                     versions = new TreeMap<>();
                     cache.put(secret.alias(), versions);
                 }
-                versions.put(secret.version(), secret);
+                versions.put(secret.version(), new SecretEntry(secret));
             }
         }
 
         private void updateLatest(Secret secret) {
             if (secret == null)
                 return;
-            latestSecret.put(secret.alias(), new LatestSecret(secret));
+            latestSecrets.put(secret.alias(), new SecretEntry(secret));
         }
 
         public Set<String> aliases() {
@@ -489,6 +507,9 @@ public class DBVaultStore implements VaultStore {
             } catch (Throwable th) {
                 throw new SystemException(th);
             }
+
+            addedSecrets.forEach(secret -> aliases.add(secret.alias()));
+
             return aliases;
         }
 
@@ -535,6 +556,11 @@ public class DBVaultStore implements VaultStore {
                 throw new SystemException(th);
             }
 
+            addedSecrets.forEach(secret -> {
+                if (secret.alias().equals(alias))
+                    versions.add(Long.parseLong(secret.version()));
+            });
+
             return versions;
         }
 
@@ -549,7 +575,7 @@ public class DBVaultStore implements VaultStore {
 
         public void restore(Connection connection, String version) {
             copy(connection, name + "." + version, name);
-            latestSecret.clear();
+            latestSecrets.clear();
             cache.clear();
         }
 
@@ -622,7 +648,7 @@ public class DBVaultStore implements VaultStore {
                 for (Secret secret : addedSecrets) {
                     count.setString(1, getName());
                     count.setString(2, secret.alias());
-                    count.setLong(3, new Long(secret.version()));
+                    count.setLong(3, Long.parseLong(secret.version()));
                     try (ResultSet rs = count.executeQuery()) {
                         int c = 0;
                         if (rs.next())
@@ -637,7 +663,7 @@ public class DBVaultStore implements VaultStore {
                         if (c == 0) {
                             insert.setString(1, name);
                             insert.setString(2, secret.alias());
-                            insert.setLong(3, new Long(secret.version()));
+                            insert.setLong(3, Long.parseLong(secret.version()));
                             insert.setString(4, encoded);
                             insert.executeUpdate();
                             insert.clearParameters();
@@ -645,7 +671,7 @@ public class DBVaultStore implements VaultStore {
                             update.setString(1, encoded);
                             update.setString(2, name);
                             update.setString(3, secret.alias());
-                            update.setLong(4, new Long(secret.version()));
+                            update.setLong(4, Long.parseLong(secret.version()));
                             update.executeUpdate();
                             update.clearParameters();
                         }
@@ -677,11 +703,11 @@ public class DBVaultStore implements VaultStore {
         }
     }
 
-    private class LatestSecret {
+    private class SecretEntry {
         long timestamp;
         Secret secret;
 
-        LatestSecret(Secret secret) {
+        SecretEntry(Secret secret) {
             timestamp = System.currentTimeMillis();
             this.secret = secret;
         }

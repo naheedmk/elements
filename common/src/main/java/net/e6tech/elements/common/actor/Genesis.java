@@ -16,38 +16,37 @@
 
 package net.e6tech.elements.common.actor;
 
-import akka.actor.ActorRef;
-import akka.actor.ActorSystem;
-import akka.pattern.Patterns;
+import com.google.common.io.ByteStreams;
 import com.typesafe.config.Config;
 import com.typesafe.config.ConfigFactory;
-import net.e6tech.elements.common.actor.pool.Events;
-import net.e6tech.elements.common.actor.pool.WorkerPool;
+import net.e6tech.elements.common.actor.typed.Guardian;
+import net.e6tech.elements.common.actor.typed.worker.WorkerPoolConfig;
 import net.e6tech.elements.common.logging.Logger;
 import net.e6tech.elements.common.resources.*;
-import scala.compat.java8.FutureConverters;
-import scala.concurrent.Await;
-import scala.concurrent.Future;
-import scala.concurrent.duration.Duration;
+import net.e6tech.elements.common.util.SystemException;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 /**
  * Created by futeh.
  */
 public class Genesis implements Initializable {
+    private static Logger logger = Logger.getLogger();
     public static final String WORKER_POOL_DISPATCHER = "worker-pool-dispatcher";
     private String name;
     private String configuration;
-    private ActorSystem system;
-    private ActorRef workerPool;
-    private int initialCapacity = 1;
-    private int maxCapacity = Integer.MAX_VALUE;  // ie unlimited
-    private long idleTimeout = 10000L;
+    private Guardian guardian;
+    private WorkerPoolConfig workPoolConfig = new WorkerPoolConfig();
     private long timeout = 5000L;
+    private String profile = "remote";
+    private Config config;
+
+    public Genesis() {
+    }
 
     public long getTimeout() {
         return timeout;
@@ -57,31 +56,43 @@ public class Genesis implements Initializable {
         this.timeout = timeout;
     }
 
-    public int getInitialCapacity() {
-        return initialCapacity;
+    public WorkerPoolConfig getWorkPoolConfig() {
+        return workPoolConfig;
     }
 
-    public void setInitialCapacity(int initialCapacity) {
-        this.initialCapacity = initialCapacity;
+    public void setWorkPoolConfig(WorkerPoolConfig workPoolConfig) {
+        this.workPoolConfig = workPoolConfig;
     }
 
-    public int getMaxCapacity() {
-        return maxCapacity;
+    public String getProfile() {
+        return profile;
     }
 
-    public void setMaxCapacity(int maxCapacity) {
-        this.maxCapacity = maxCapacity;
+    public void setProfile(String profile) {
+        this.profile = profile;
     }
 
-    public long getIdleTimeout() {
-        return idleTimeout;
+    public Config getConfig() {
+        return config;
     }
 
-    public void setIdleTimeout(long idleTimeout) {
-        if (idleTimeout < 0) {
-            throw new IllegalArgumentException();
+    public Genesis(Provision provision, WorkerPoolConfig workerPoolConfig) {
+        if (provision == null || provision.getBean(Guardian.class) == null) {
+            WorkerPoolConfig wpc = workerPoolConfig;
+            if (workerPoolConfig == null)
+                wpc = new WorkerPoolConfig();
+            setName(getClass().getSimpleName() + wpc.hashCode());
+            setProfile("local");
+            setWorkPoolConfig(wpc);
+            initialize((Resources) null);
+            if (provision != null)
+                provision.getResourceManager().addResourceProvider(ResourceProvider.wrap(getClass().getSimpleName(), (OnShutdown) this::shutdown));
+            getGuardian().setEmbedded(true);
         } else {
-            this.idleTimeout = idleTimeout;
+            guardian = provision.getBean(Guardian.class);
+            setName(guardian.getName());
+            if (workerPoolConfig != null)
+                setWorkPoolConfig(workerPoolConfig);
         }
     }
 
@@ -89,18 +100,23 @@ public class Genesis implements Initializable {
     public void initialize(Resources resources) {
         if (name == null)
             throw new IllegalStateException("name is null");
+
+        Config conf = null;
+
         // Create an Akka system
-        Config config = null;
         if (configuration != null) {
-            config = ConfigFactory.parseString(configuration);
+            conf = ConfigFactory.parseString(configuration);
         } else {
-            config = ConfigFactory.defaultApplication();
+            conf = ConfigFactory.defaultApplication();
         }
-        initialize(config);
+
+        initialize(conf);
 
         if (resources != null) {
             final ResourceManager resourceManager = resources.getResourceManager();
             resourceManager.addResourceProvider(ResourceProvider.wrap("Genesis", (OnShutdown) this::shutdown));
+            if (guardian != null)
+                resourceManager.registerBean(guardian.getName(), guardian);
         }
     }
 
@@ -108,7 +124,20 @@ public class Genesis implements Initializable {
         if (name == null)
             throw new IllegalStateException("name is null");
 
-        Config config = (cfg != null) ? cfg : ConfigFactory.defaultApplication();
+        config = (cfg != null) ? cfg : ConfigFactory.defaultApplication();
+
+        if (profile != null) {
+            if (!profile.endsWith(".conf"))
+                profile += ".conf";
+            String path = Genesis.class.getPackage().getName().replace('.', '/');
+            try (InputStream in = Genesis.class.getClassLoader().getResourceAsStream(path + "/" + profile)) {
+                byte[] bytes = ByteStreams.toByteArray(in);
+                String classPathConfig = new String(bytes, StandardCharsets.UTF_8);
+                config = config.withFallback(ConfigFactory.parseString(classPathConfig));
+            } catch (IOException e) {
+                throw new SystemException(e);
+            }
+        }
 
         if (!config.hasPath(WORKER_POOL_DISPATCHER)) {
             config = config.withFallback(ConfigFactory.parseString(
@@ -128,17 +157,19 @@ public class Genesis implements Initializable {
         }
 
         // Create an Akka system
-        system = ActorSystem.create(name, config);
+        guardian = Guardian.create(getName(), getTimeout(), config, workPoolConfig);
+    }
 
-        // Create a worker pool
-        workerPool =  WorkerPool.newPool(system, initialCapacity, maxCapacity, idleTimeout);
+    public Guardian getGuardian() {
+        return guardian;
     }
 
     public void shutdown() {
+        guardian.getSystem().terminate();
         try {
-            Await.ready(system.terminate(), Duration.create(30, TimeUnit.SECONDS));
-        } catch (TimeoutException | InterruptedException e) {
-            Logger.suppress(e);
+            guardian.getSystem().getWhenTerminated().toCompletableFuture().get();
+        } catch (Exception e) {
+            logger.warn("Error during shutdown", e);
         }
     }
 
@@ -158,16 +189,9 @@ public class Genesis implements Initializable {
         this.configuration = configuration;
     }
 
-    public ActorRef getWorkerPool() {
-        return workerPool;
-    }
-
-    public void setWorkerPool(ActorRef workerPool) {
-        this.workerPool = workerPool;
-    }
-
-    public ActorSystem getSystem() {
-        return system;
+    public void terminate() {
+        if (guardian != null)
+            guardian.getSystem().terminate();
     }
 
     public CompletionStage<Void> async(Runnable runnable) {
@@ -175,10 +199,7 @@ public class Genesis implements Initializable {
     }
 
     public CompletionStage<Void> async(Runnable runnable, long timeout) {
-        Future future = Patterns.ask(workerPool, runnable, timeout);
-        return FutureConverters.toJava(future).thenAcceptAsync(ret -> {
-            // do nothing
-        });
+        return guardian.talk(timeout).async(runnable);
     }
 
     public <R> CompletionStage<R> async(Callable<R> callable) {
@@ -186,10 +207,6 @@ public class Genesis implements Initializable {
     }
 
     public <R> CompletionStage<R> async(Callable<R> callable, long timeout) {
-        Future future = Patterns.ask(workerPool, callable, timeout);
-        return FutureConverters.toJava(future).thenApplyAsync(ret -> {
-            Events.Response response = (Events.Response) ret;
-            return (R) response.getValue();
-        });
+        return guardian.talk(timeout).async(callable);
     }
 }

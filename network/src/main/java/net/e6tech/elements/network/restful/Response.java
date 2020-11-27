@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -66,8 +66,9 @@ public class Response implements Serializable {
         this.headerFields = headerFields;
     }
 
+    @SuppressWarnings("unchecked")
     public <T> T read(Class<T> cls) throws IOException {
-        if (cls.isAssignableFrom(String.class))
+        if (result == null || cls.isAssignableFrom(String.class))
             return (T) result;
         return mapper.readValue(result, cls);
     }

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,13 +15,15 @@ limitations under the License.
 */
 package net.e6tech.elements.common.script;
 
-import groovy.lang.Closure;
-import groovy.lang.GString;
-import groovy.lang.GroovyObjectSupport;
-import groovy.lang.Script;
+import groovy.lang.*;
 import net.e6tech.elements.common.logging.Logger;
+import net.e6tech.elements.common.util.SystemException;
+import net.e6tech.elements.common.util.function.SupplierWithException;
 
 import javax.script.ScriptException;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Properties;
 
 
@@ -30,7 +32,33 @@ import java.util.Properties;
  */
 public abstract class AbstractScriptBase<T extends AbstractScriptShell> extends Script {
 
+    public static final String CALLER = "__caller";
+
+    private static final Logger logger = Logger.getLogger();
+
     T scriptShell;
+
+    private Binding privateBinding = new Binding();
+
+    @Override
+    public void setBinding(Binding binding) {
+        if (binding != null) {
+            if (binding.hasVariable(Scripting.__DIR))
+                privateBinding.setVariable(Scripting.__DIR, binding.getProperty(Scripting.__DIR));
+            if (binding.hasVariable(Scripting.__FILE))
+                privateBinding.setVariable(Scripting.__FILE, binding.getProperty(Scripting.__FILE));
+        }
+        super.setBinding(binding);
+    }
+
+    @Override
+    public Object getProperty(String property) {
+        try {
+            return privateBinding.getVariable(property);
+        } catch (MissingPropertyException e) {
+            return super.getProperty(property);
+        }
+    }
 
     public T getShell() {
         if (scriptShell == null) {
@@ -39,16 +67,47 @@ public abstract class AbstractScriptBase<T extends AbstractScriptShell> extends 
         return scriptShell;
     }
 
+    protected boolean hasVariable(String var) {
+        return getBinding().hasVariable(var);
+    }
+
+    @SuppressWarnings("unchecked")
     protected <V> V getVariable(String var) {
         return (V) getBinding().getVariable(var);
     }
 
+    protected void setVariable(String var, Object val) {
+        getBinding().setVariable(var, val);
+    }
+
+    protected <T, E extends Exception> T call(SupplierWithException<T, E> supplier) throws E {
+        Object prev = getShell().getScripting().get(CALLER);
+        try {
+            getShell().getScripting().put(CALLER, this);
+            return supplier.get();
+        } finally {
+            getShell().getScripting().put(CALLER, prev);
+        }
+    }
+
+    /**
+     * execute the path relative to __dir
+     */
+    public Object execDir(String path) throws ScriptException {
+        String dir = (String) getProperty(Scripting.__DIR);
+        Path p = Paths.get(dir, path);
+        return call(() -> getShell().getScripting().exec(p.toString()));
+    }
+
     public Object exec(String path) throws ScriptException {
-        return getShell().getScripting().exec(path);
+        return call(() -> getShell().getScripting().exec(path));
     }
 
     public void exec(Object ... items) {
-        getShell().exec(items);
+        call(() -> {
+            getShell().exec(items);
+            return null;
+        });
     }
 
     public AbstractScriptShell.Dir dir(String dir) {
@@ -57,9 +116,13 @@ public abstract class AbstractScriptBase<T extends AbstractScriptShell> extends 
 
     public Object tryExec(String path) {
         try {
-            return getShell().getScripting().exec(path);
-        } catch (Exception e) {
-            Logger.suppress(e);
+            return call(() -> getShell().getScripting().exec(path));
+        } catch (ScriptException e) {
+            if (e.getCause() instanceof IOException) {
+                logger.info("Script {} not processed: {}", path, e.getCause().getMessage());
+            } else {
+                logger.warn("Script not processed due to error.", e);
+            }
             return null;
         }
     }
@@ -108,6 +171,23 @@ public abstract class AbstractScriptBase<T extends AbstractScriptShell> extends 
     public void env(String name, Closure closure) {
         if (getShell().getScripting().get("env").equals(name)) {
             closure.call();
+        }
+    }
+
+    public String getenv(String envName, String defaultVal) {
+        String value = System.getenv(envName);
+        return (value != null) ? value : defaultVal;
+    }
+
+    public Class loadClass(String className) {
+        return loadClass(getShell().getClass().getClassLoader(), className);
+    }
+
+    public Class loadClass(ClassLoader classLoader, String className) {
+        try {
+            return classLoader.loadClass(className);
+        } catch (ClassNotFoundException e) {
+            throw new SystemException(e);
         }
     }
 }

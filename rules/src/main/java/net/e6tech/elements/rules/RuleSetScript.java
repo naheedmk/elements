@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -16,8 +16,8 @@ limitations under the License.
 package net.e6tech.elements.rules;
 
 import groovy.lang.Closure;
-import net.e6tech.elements.common.script.AbstractScriptBase;
 import net.e6tech.elements.common.resources.Configuration;
+import net.e6tech.elements.common.script.AbstractScriptBase;
 
 import java.util.List;
 import java.util.Map;
@@ -61,6 +61,7 @@ public abstract class RuleSetScript extends AbstractScriptBase<RuleSet> {
         });
     }
 
+    @SuppressWarnings("unchecked")
     protected void traverse(Rule parent, Object obj) {
         if (obj instanceof List) {
             List list = (List) obj;

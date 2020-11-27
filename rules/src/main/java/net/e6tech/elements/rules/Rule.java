@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,9 +23,7 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-import static net.e6tech.elements.rules.ControlFlow.Continue;
-import static net.e6tech.elements.rules.ControlFlow.Failed;
-import static net.e6tech.elements.rules.ControlFlow.Success;
+import static net.e6tech.elements.rules.ControlFlow.*;
 
 /**
  * VERY IMPORTANT.  This class must be thread safe and not keep any mutable data.
@@ -156,14 +154,11 @@ public class Rule {
     }
 
     public void run(RuleContext context) {
-        if (_run(context, true) == Failed) {
-            context.setCompleted(false);
-        } else {
-            context.setCompleted(true);
-        }
+        boolean result = _run(context, true) == Failed;
+        context.setCompleted(!result);
     }
 
-    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134", "squid:S00100"})
+    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S134", "squid:S00100", "squid:S3776"})
     private ControlFlow _run(RuleContext context, boolean root) {
         long start = System.currentTimeMillis();
         boolean cond = true;
@@ -243,7 +238,7 @@ public class Rule {
                 runClosure(context, proceed);
                 context.ruleExecuted(this);
                 if(measurement != null)
-                    measurement.add((double)(System.currentTimeMillis() - start));
+                    measurement.append((double)(System.currentTimeMillis() - start));
             } catch (Exception ex) {
                 return handleException(context, ex);
             }

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@ limitations under the License.
 */
 package net.e6tech.elements.common.util;
 
+import net.e6tech.elements.common.Tags;
 import org.junit.jupiter.api.Test;
 
 import javax.naming.Context;
@@ -23,6 +24,7 @@ import javax.naming.InitialContext;
 /**
  * Created by futeh.
  */
+@Tags.Common
 public class InitialContextTest {
 
     @Test

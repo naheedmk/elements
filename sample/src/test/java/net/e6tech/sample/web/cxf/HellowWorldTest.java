@@ -16,22 +16,26 @@
 
 package net.e6tech.sample.web.cxf;
 
-import net.e6tech.elements.common.reflection.Reflection;
-import net.e6tech.elements.network.restful.Response;
+import net.e6tech.elements.common.resources.Atom;
 import net.e6tech.elements.network.restful.RestfulProxy;
+import net.e6tech.elements.web.cxf.SecurityAnnotationEngine;
 import net.e6tech.sample.BaseCase;
+import net.e6tech.sample.Tags;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.ws.rs.BadRequestException;
-import javax.ws.rs.NotSupportedException;
-import java.io.PrintWriter;
+import java.lang.reflect.Method;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Created by futeh.
  */
+@Tags.Sample
 public class HellowWorldTest extends BaseCase {
     HelloWorld helloWorld;
     RestfulProxy proxy;
@@ -40,31 +44,95 @@ public class HellowWorldTest extends BaseCase {
     public void setup() {
         proxy = new RestfulProxy("http://localhost:19001/restful");
         proxy.setSkipCertCheck(true);
-        proxy.setPrinter(new PrintWriter(System.out, true));
+        // proxy.setPrinter(new PrintWriter(System.out, true));
         helloWorld = proxy.newProxy(HelloWorld.class);
     }
 
     @Test
-    public void sayHello() {
-        helloWorld.ping();
+    void sayHello() {
         String response = helloWorld.sayHello("hello");
         System.out.println(response);
+    }
 
-        response = helloWorld.sayHello2("hello2", "blah");
-        System.out.println(response);
+    @Test
+    void echo() {
+        String response = helloWorld.echo(null);
+        assertTrue(response == null);
 
-        Response resp = proxy.getLastResponse();
+        response = helloWorld.echo("hello");
+        assertEquals(response, "hello");
+    }
 
-        assertThrows(BadRequestException.class, () -> helloWorld.sayHello2("elements", "  "));
+    @Test
+    public void withParam() {
+        helloWorld.withParam("1234", "WWWWWWWWWWWW");
+    }
+
+    @Test
+    public void withSecurity() throws Exception {
+        Atom atom = provision.getResourceManager().getAtom("helloWorld");
+        SecurityAnnotationEngine engine = (SecurityAnnotationEngine) atom.get("_securityAnnotation");
+        assertTrue(engine.getSecurityProvider(HelloWorld.class).equals(HelloWorldRoles.class));
+        Method method = HelloWorld.class.getDeclaredMethod("withSecurity", String.class);
+        Set<String> roles = engine.lookupRoles(HelloWorld.class, method);
+        assertTrue(roles.contains("role1"));
+        assertTrue(roles.contains("role2"));
+        helloWorld.withSecurity("hello");
+
+        method = HelloWorld.class.getDeclaredMethod("sayHello", String.class);
+        roles = engine.lookupRoles(HelloWorld.class, method);
+        assertTrue(roles.contains("PermitAll"));
+    }
+
+    // even though the method is annotated with DenyAll, a user with PermitAll can still access
+    @Test
+    public void readOnly() throws Exception {
+        Atom atom = provision.getResourceManager().getAtom("helloWorld");
+        SecurityAnnotationEngine engine = (SecurityAnnotationEngine) atom.get("_securityAnnotation");
+        Method method = HelloWorld.class.getDeclaredMethod("post", HelloData.class);
+        assertTrue(!engine.hasAccess(new HelloWorld(), method, new Object[] { new HelloData()}, "ReadOnly"));
+    }
+
+    @Test
+    public void permitAll() throws Exception {
+        Atom atom = provision.getResourceManager().getAtom("helloWorld");
+        SecurityAnnotationEngine engine = (SecurityAnnotationEngine) atom.get("_securityAnnotation");
+        Method method = HelloWorld.class.getDeclaredMethod("withSecurity", String.class);
+        assertTrue(engine.hasAccess(new HelloWorld(), method, new Object[] { "test" }, "PermitAll"));
     }
 
     @Test
     public void post() {
         HelloData data = new HelloData();
+        data.setData("hello");
         data = helloWorld.post(data);
+        assertTrue(data.getData().equals("hello"));
+    }
 
-        assertThrows(BadRequestException.class, () -> helloWorld.post(null));
+    @Test
+    public void badPost() {
+        provision.suppressLogging(() -> {
+            assertThrows(BadRequestException.class, () -> helloWorld.post(null));
+            assertThrows(BadRequestException.class, () -> helloWorld.badPost(new HelloData()));
+        });
+    }
 
-        assertThrows(BadRequestException.class, () -> helloWorld.badPost(new HelloData()));
+    @Test
+    public void delete() {
+        HelloData data = new HelloData();
+        data.setData("hello");
+        helloWorld.delete("does not matter", data);
+        helloWorld.delete("does not matter", null);
+        helloWorld.delete2("null data");
+    }
+
+    @Test
+    public void list() {
+        List<HelloData> list = helloWorld.list();
+    }
+
+    @Test
+    public void map() {
+        Map<String, HelloData> map = helloWorld.map();
     }
 }

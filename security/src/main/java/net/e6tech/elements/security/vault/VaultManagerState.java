@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,16 +18,15 @@ package net.e6tech.elements.security.vault;
 
 import net.e6tech.elements.common.util.SystemException;
 
-import java.util.*;
+import java.util.Arrays;
 
 /**
  * Created by futeh.
  */
 public class VaultManagerState implements Cloneable {
 
-    private char[] password;
+    private char[] currentPassphrase;
     private ClearText signature;
-    private Map<String, ClearText> cachedKeys = Collections.synchronizedMap(new HashMap<>());
 
     @SuppressWarnings("squid:S2975")
     public VaultManagerState clone() {
@@ -38,17 +37,17 @@ public class VaultManagerState implements Cloneable {
             throw new SystemException(e);
         }
 
-        if (password != null)
-            state.password = Arrays.copyOf(password, password.length);
+        if (currentPassphrase != null)
+            state.currentPassphrase = Arrays.copyOf(currentPassphrase, currentPassphrase.length);
         return state;
     }
 
-    public char[] getPassword() {
-        return password;
+    public char[] getCurrentPassphrase() {
+        return currentPassphrase;
     }
 
-    public void setPassword(char[] password) {
-        this.password = password;
+    public void setCurrentPassphrase(char[] currentPassphrase) {
+        this.currentPassphrase = currentPassphrase;
     }
 
     public ClearText getSignature() {
@@ -57,13 +56,5 @@ public class VaultManagerState implements Cloneable {
 
     public void setSignature(ClearText signature) {
         this.signature = signature;
-    }
-
-    public Map<String, ClearText> getCachedKeys() {
-        return cachedKeys;
-    }
-
-    public void setCachedKeys(Map<String, ClearText> cachedKeys) {
-        this.cachedKeys = cachedKeys;
     }
 }

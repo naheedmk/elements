@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ import java.util.List;
 /**
  * Created by futeh.
  */
-@SuppressWarnings({"squid:S2176", "squid:S1319", "squid:S1149"})
+@SuppressWarnings({"unchecked", "squid:S2176", "squid:S1319", "squid:S1149"})
 public class InitialContextFactory implements javax.naming.spi.InitialContextFactory {
     static InheritableThreadLocal<Context> threadLocal = new InheritableThreadLocal<>();
 

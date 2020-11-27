@@ -18,7 +18,8 @@ package net.e6tech.sample;
 
 import net.e6tech.elements.common.launch.LaunchController;
 import net.e6tech.elements.common.resources.Provision;
-import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 
 /**
  * Created by futeh.
@@ -27,11 +28,16 @@ public class BaseCase {
 
     public static Provision provision;
 
-    @BeforeEach
-    public void launch() {
+    @BeforeAll
+    public static void launch() {
         LaunchController controller = new LaunchController();
-        controller.launchScript("conf/provisioning/sample.groovy")
+        controller.launchScript("conf/provisioning/sample/sample.groovy")
                 .addLaunchListener(p -> provision = p.getInstance(Provision.class))
                 .launch();
+    }
+
+    @Test
+    void basic() {
+
     }
 }

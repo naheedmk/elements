@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ import javax.persistence.criteria.Path;
  */
 public abstract class Handler implements InterceptorHandler {
 
-    static Interceptor interceptor = Interceptor.getInstance();
+    static Interceptor interceptor = new Interceptor();
 
     private EntityManager entityManager;
     private CriteriaBuilder builder;

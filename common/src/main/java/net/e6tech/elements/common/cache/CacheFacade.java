@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,10 +31,9 @@ import java.util.function.Consumer;
  * {@code new CacheFacade&lt;K,V&gt;("name") {}}
  * Created by futeh.
  */
+@SuppressWarnings("unchecked")
 public abstract class CacheFacade<K, V> {
-
-    @Inject(optional = true)
-    protected CacheConfiguration pool;
+    protected CacheConfiguration configuration;
     protected String name;
     protected Class keyClass;
     protected Class valueClass;
@@ -80,9 +79,9 @@ public abstract class CacheFacade<K, V> {
     }
 
     public CacheFacade<K,V> initPool(Consumer<CacheConfiguration> configurator) {
-        if (pool == null) {
-            pool = new CacheConfiguration();
-            configurator.accept(pool);
+        if (configuration == null) {
+            configuration = new CacheConfiguration();
+            configurator.accept(configuration);
         }
         return this;
     }
@@ -99,12 +98,13 @@ public abstract class CacheFacade<K, V> {
         this.name = name;
     }
 
-    public CacheConfiguration getPool() {
-        return pool;
+    public CacheConfiguration getCacheConfiguration() {
+        return configuration;
     }
 
-    public void setPool(CacheConfiguration pool) {
-        this.pool = pool;
+    @Inject(optional = true)
+    public void setCacheConfiguration(CacheConfiguration configuration) {
+        this.configuration = configuration;
     }
 
     public V get(K key) {
@@ -117,7 +117,8 @@ public abstract class CacheFacade<K, V> {
         if (value == null) {
             try {
                 value = callable.call();
-                c.put(key, value);
+                if (value != null)
+                    c.put(key, value);
             } catch (Exception e) {
                 throw new SystemException(e);
             }
@@ -137,10 +138,10 @@ public abstract class CacheFacade<K, V> {
     protected synchronized Cache<K,V> getCache() {
         if (cache != null)
             return cache;
-        if (pool == null) {
+        if (configuration == null) {
             initPool();
         }
-        cache = pool.getCache(name, keyClass, valueClass);
+        cache = configuration.getCache(name, keyClass, valueClass);
         return cache;
     }
 }

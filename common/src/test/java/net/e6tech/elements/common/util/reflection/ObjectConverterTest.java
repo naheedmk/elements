@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 package net.e6tech.elements.common.util.reflection;
 
+import net.e6tech.elements.common.Tags;
 import net.e6tech.elements.common.reflection.ObjectConverter;
 import org.junit.jupiter.api.Test;
 
@@ -28,8 +29,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Created by futeh.
  */
+@Tags.Common
 public class ObjectConverterTest {
     @Test
+    @SuppressWarnings("unchecked")
     public void convert() throws Exception {
         ObjectConverter converter = new ObjectConverter();
         List<Long> list = new ArrayList<>();

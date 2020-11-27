@@ -36,7 +36,7 @@ import java.util.function.BiConsumer;
  * See AnnotationTest for an example
  */
 public class Annotator implements InvocationHandler {
-    private static Map<String, Integer> objectMethods = new HashMap<>();
+    static Map<String, Integer> objectMethods = new HashMap<>();
 
     private Map<Method, Object> values;
     private Method lastAccessed;
@@ -51,6 +51,7 @@ public class Annotator implements InvocationHandler {
         objectMethods.put("equals", 1);
     }
 
+    @SuppressWarnings("unchecked")
     protected Annotator(Class type, Map<Method, Object> values) {
         this.type = type;
         this.values = values;
@@ -118,13 +119,14 @@ public class Annotator implements InvocationHandler {
             try {
                 entry.setValue(entry.getKey().invoke(original));
             } catch (Exception e) {
-                Logger.suppress(e);
+                throw new SystemException(e);
             }
         }
         hashCode = null;
         toString = null;
     }
 
+    @SuppressWarnings("unchecked")
     private int hashCodeImpl() {
         int hash = 0;
         Map.Entry<Method, Object> entry;
@@ -191,71 +193,7 @@ public class Annotator implements InvocationHandler {
             this.handler = handler;
         }
 
-        public AnnotationValue set(Callable<String> callable, String value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<Boolean> callable, Boolean value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<boolean[]> callable, boolean[] value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<Byte> callable, Byte value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<byte[]> callable, byte[] value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<Character> callable, Character value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<char[]> callable, char[] value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<Double> callable, Double value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<double[]> callable, double[] value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<Float> callable, Float value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<float[]> callable, float[] value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<Integer> callable, Integer value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue  set(Callable<int[]> callable, int[] value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<Long> callable, Long value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<long[]> callable, long[] value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<Short> callable, Short value) {
-            return _set(callable, value);
-        }
-
-        public AnnotationValue set(Callable<short[]> callable, short[] value) {
+        public <T> AnnotationValue set(Callable<T> callable, T value) {
             return _set(callable, value);
         }
 

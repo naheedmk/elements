@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Futeh Kao
+ * Copyright 2015-2019 Futeh Kao
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
-import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -46,7 +46,7 @@ import java.util.*;
 /**
  * Created by futeh.
  */
-@SuppressWarnings({"squid:S3776", "squid:S134", "squid:MethodCyclomaticComplexity"})
+@SuppressWarnings({"unchecked", "squid:S3776", "squid:S134", "squid:MethodCyclomaticComplexity"})
 public class Configuration extends LinkedHashMap<String, Object> {
 
     private static Logger logger = Logger.getLogger();
@@ -68,7 +68,7 @@ public class Configuration extends LinkedHashMap<String, Object> {
 
     public static Map<String, List<String>> defineEnvironments(String str) {
         Yaml yaml = new Yaml(new YamlConstructor());
-        return (Map<String, List<String>>) yaml.load(str);
+        return yaml.load(str);
     }
 
     @Override
@@ -91,7 +91,7 @@ public class Configuration extends LinkedHashMap<String, Object> {
         this.properties = properties;
     }
 
-    protected static Yaml newYaml() {
+    public static Yaml newYaml() {
         return new Yaml(yamlConstructor);
     }
 
@@ -106,6 +106,16 @@ public class Configuration extends LinkedHashMap<String, Object> {
             }
             return load(builder.toString());
         }
+    }
+
+    public Configuration load(Configuration config) {
+        properties.putAll(config.properties);
+        merge(this, config);
+        for (Map.Entry<String, List<Reference>> entry : config.references.entrySet()) {
+            List<Reference> current = references.computeIfAbsent(entry.getKey(), k -> new ArrayList<>());
+            current.addAll(entry.getValue());
+        }
+        return this;
     }
 
     public Configuration load(String configStr) {
@@ -171,7 +181,7 @@ public class Configuration extends LinkedHashMap<String, Object> {
         }
         Yaml yaml = new Yaml();
         Path path = Paths.get(file);
-        yaml.dump(map, Files.newBufferedWriter(path, Charset.forName("UTF-8")));
+        yaml.dump(map, Files.newBufferedWriter(path, StandardCharsets.UTF_8));
         return path;
     }
 
@@ -182,7 +192,7 @@ public class Configuration extends LinkedHashMap<String, Object> {
             if (value.contains(BEGIN)) {
                 Yaml yaml = newYaml();
                 value = parse(value, false);
-                Map<String, Object> map = (Map<String, Object>) yaml.load( key + ": " + value);
+                Map<String, Object> map = yaml.load( key + ": " + value);
                 put(key, map.get(key));
                 return (T) map.get(key);
             } else {
@@ -297,7 +307,7 @@ public class Configuration extends LinkedHashMap<String, Object> {
                     String substitutionObjectKey = prefix;
                     while (substitutionObjectKey.endsWith("."))
                         substitutionObjectKey = substitutionObjectKey.substring(0, substitutionObjectKey.length() - 1);
-                    List<Reference> referenceList = references.get(prefix);
+                    List<Reference> referenceList = references.get(substitutionObjectKey);
                     if (referenceList != null) {
                         for (Reference reference : referenceList) {
                             map.put(reference.key, resolver.resolve(reference.lookup));
@@ -348,7 +358,7 @@ public class Configuration extends LinkedHashMap<String, Object> {
             }
 
             if (!applicableKeys.isEmpty()) {
-                logger.warn("object {} do not have properties: {}", object.getClass(), applicableKeys);
+                logger.warn("object {} does not have properties: {}", object.getClass(), applicableKeys);
             }
 
             // recurse into fields
@@ -477,8 +487,14 @@ public class Configuration extends LinkedHashMap<String, Object> {
             BeanInfo info = Introspector.getBeanInfo(object.getClass());
             for (PropertyDescriptor desc : info.getPropertyDescriptors()) {
                 if (desc.getWriteMethod() != null && map.containsKey(desc.getName())) {
+                    Class type = desc.getPropertyType();
+                    if (desc.getReadMethod() != null) {
+                        Object existing = desc.getReadMethod().invoke(object);
+                        if (existing != null)
+                            type = existing.getClass();
+                    }
                     String encoding = mapper.writeValueAsString(map.get(desc.getName()));
-                    Object value = mapper.readValue(encoding, desc.getPropertyType());
+                    Object value = mapper.readValue(encoding, type);
                     if (listener != null)
                         listener.instanceCreated(value, desc.getPropertyType(), value);
                     desc.getWriteMethod().invoke(object, value);
@@ -523,7 +539,7 @@ public class Configuration extends LinkedHashMap<String, Object> {
             }
 
             if (!applicableKeys.isEmpty()) {
-                logger.warn("object {} do not have properties: {}", object.getClass().getName(), applicableKeys);
+                logger.warn("object {} does not have properties: {}", object.getClass().getName(), applicableKeys);
             }
 
         } catch (Exception e) {
@@ -591,7 +607,7 @@ public class Configuration extends LinkedHashMap<String, Object> {
         }
     }
 
-    private static class YamlConstructor extends Constructor {
+    public static class YamlConstructor extends Constructor {
 
         public YamlConstructor() {
             this.yamlConstructors.put(Tag.FLOAT, new BigDecimalConstructor());
@@ -600,7 +616,7 @@ public class Configuration extends LinkedHashMap<String, Object> {
 
         private class BigDecimalConstructor extends AbstractConstruct {
             public Object construct(Node node) {
-                String value = constructScalar((ScalarNode) node).toString().replaceAll("_", "");
+                String value = constructScalar((ScalarNode) node).replaceAll("_", "");
                 int sign = +1;
                 char first = value.charAt(0);
                 if (first == '-') {
@@ -619,8 +635,8 @@ public class Configuration extends LinkedHashMap<String, Object> {
 
         private class LongConstructor extends AbstractConstruct {
             public Object construct(Node node) {
-                String value = constructScalar((ScalarNode) node).toString().replaceAll("_", "");
-                return new Long(value);
+                String value = constructScalar((ScalarNode) node).replaceAll("_", "");
+                return Long.parseLong(value);
 
             }
         }

@@ -16,6 +16,9 @@
 
 package net.e6tech.elements.common.inject.spi;
 
+import net.e6tech.elements.common.inject.Injector;
+import net.e6tech.elements.common.util.SystemException;
+
 /**
  * Created by futeh.
  */
@@ -26,21 +29,26 @@ class Binding {
     public Binding() {
     }
 
-    public Binding(Object value) {
+    Binding(Object value) {
         this.value = value;
     }
 
-    public Binding(Class implementation) {
+    Binding(Class implementation) {
         this.implementation = implementation;
     }
 
-    public Binding(Binding binding) {
-        this.implementation = binding.implementation;
-        this.value = binding.value;
-    }
-
-    public boolean isSingleton() {
-        return implementation == null; // value can be null
+    @SuppressWarnings("unchecked")
+    public Binding getInstance(Injector injector) {
+        if (implementation != null) {
+            try {
+                Object instance = implementation.getDeclaredConstructor().newInstance();
+                injector.inject(instance);
+                return new Binding(instance);
+            } catch (Exception e) {
+                throw new SystemException(e);
+            }
+        }
+        return this;
     }
 
     public Class getImplementation() {

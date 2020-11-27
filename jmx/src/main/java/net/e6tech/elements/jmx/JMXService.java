@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ package net.e6tech.elements.jmx;
 
 import com.j256.simplejmx.common.JmxResource;
 import com.j256.simplejmx.server.JmxServer;
-import com.sun.jdmk.comm.AuthInfo;
 import net.e6tech.elements.common.logging.Logger;
 import net.e6tech.elements.common.reflection.ObjectConverter;
 import net.e6tech.elements.common.util.SystemException;
@@ -53,34 +52,38 @@ public class JMXService {
         start(InetAddress.getLoopbackAddress(), port, jmxrmiPort, user, password);
     }
 
-    @SuppressWarnings("squid:S00112")
+    @SuppressWarnings({"unchecked", "squid:S00112", "squid:S1191"})
     public static void start(InetAddress bindAddress, int port, int jmxrmiPort, String user, char[] password) throws Exception {
-        JMXHtmlServer adapter = new JMXHtmlServer(port);
-        adapter.setBindAddress(bindAddress);
-        if (user != null && user.length() > 0) {
-            AuthInfo authInfo = new AuthInfo(user, new String(password));
-            adapter.addUserAuthenticationInfo(authInfo);
-        }
-        adapter.start();
-        try {
-            ManagementFactory.getPlatformMBeanServer().registerMBean(adapter, new ObjectName("JMX:name=htmlAdaptorServer"));
-        } catch (Exception e) {
-            throw new SystemException(e);
+        if (port >= 0) {
+            JMXHtmlServer adapter = new JMXHtmlServer(port);
+            adapter.setBindAddress(bindAddress);
+            if (user != null && user.length() > 0) {
+                com.sun.jdmk.comm.AuthInfo authInfo = new com.sun.jdmk.comm.AuthInfo(user, new String(password));
+                adapter.addUserAuthenticationInfo(authInfo);
+            }
+            adapter.start();
+            try {
+                ManagementFactory.getPlatformMBeanServer().registerMBean(adapter, new ObjectName("JMX:name=htmlAdaptorServer"));
+            } catch (Exception e) {
+                throw new SystemException(e);
+            }
         }
 
-        MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
-        Registry registry = LocateRegistry.createRegistry(jmxrmiPort);
-        registry.list();
-        Map env = new HashMap<>();
-        if (user != null && user.length() > 0) {
-            String[] creds = {user, new String(password)};
-            env.put(JMXConnector.CREDENTIALS, creds);
-        }
-        JMXServiceURL url = new JMXServiceURL("service:jmx:rmi:///jndi/rmi://localhost:" + jmxrmiPort + "/server");
-        JMXConnectorServer cs = JMXConnectorServerFactory.newJMXConnectorServer(url, env, mbs);
-        cs.start();
+        if (jmxrmiPort >= 0) {
+            MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
+            Registry registry = LocateRegistry.createRegistry(jmxrmiPort);
+            registry.list();
+            Map env = new HashMap<>();
+            if (user != null && user.length() > 0) {
+                String[] creds = {user, new String(password)};
+                env.put(JMXConnector.CREDENTIALS, creds);
+            }
+            JMXServiceURL url = new JMXServiceURL("service:jmx:rmi:///jndi/rmi://localhost:" + jmxrmiPort + "/server");
+            JMXConnectorServer cs = JMXConnectorServerFactory.newJMXConnectorServer(url, env, mbs);
+            cs.start();
 
-        mbs.registerMBean(cs, new ObjectName("connector:type=standard_rmi") );
+            mbs.registerMBean(cs, new ObjectName("connector:type=standard_rmi"));
+        }
     }
 
     public static void registerMBean(Object mbean, String name) {
@@ -112,7 +115,7 @@ public class JMXService {
         }
     }
 
-    @SuppressWarnings("squid:S135")
+    @SuppressWarnings({"squid:S135", "squid:S2095"})
     private static void register(Object mbean, ObjectName objectName) throws JMException {
         MBeanServer server = ManagementFactory.getPlatformMBeanServer();
         JmxServer jmxServer = new JmxServer(server);
@@ -139,6 +142,7 @@ public class JMXService {
         }
     }
 
+    @SuppressWarnings("squid:S2095")
     public static void unregisterMBean(String name) {
         MBeanServer server = ManagementFactory.getPlatformMBeanServer();
         try {
@@ -184,7 +188,7 @@ public class JMXService {
     }
 
     /* invokes an operation on the mbean */
-    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S00112", "squid:S135", "squid:S134"})
+    @SuppressWarnings({"squid:MethodCyclomaticComplexity", "squid:S00112", "squid:S135", "squid:S134", "squid:S3776"})
     public static Object invoke(ObjectName objectName,
                        String methodName,
                        Object ... arguments) throws Exception {
@@ -212,7 +216,7 @@ public class JMXService {
                 MBeanParameterInfo[] params = op.getSignature();
                 if (arglen != params.length)
                     continue;
-                if (params != null && arguments != null) {
+                if (arguments != null) {
                     signature = new String[params.length];
                     args = new Object[params.length];
                     for (int i = 0 ; i < params.length; i++) {

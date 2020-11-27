@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@ package net.e6tech.elements.common.resources;
 
 /**
  * Created by futeh.
- * Initializable gets called after the containing Component has run the closure to setup the Component.
+ * Initializable gets called after the containing Component has run the closure to setup the Atom.
  */
 @FunctionalInterface
 public interface Initializable {

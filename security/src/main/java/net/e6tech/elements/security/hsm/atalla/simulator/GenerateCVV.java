@@ -26,6 +26,7 @@ import java.security.GeneralSecurityException;
 /**
  * Created by futeh.
  */
+@SuppressWarnings("squid:S2278")
 public class GenerateCVV extends Command {
 
     // <5D#Algorithm#Header,EMFK.E(KCVV),MAC#Reserved#Data#>
@@ -38,7 +39,7 @@ public class GenerateCVV extends Command {
             AKB akb = new AKB(getField(2));
             byte[] kcvv = akb.decryptKey(simulator.masterKeyBytes());
             String cvv = generateVisaCVV(getField(4), kcvv, 8);
-            return "6D#" + cvv + "#" + akb.checkDigit + "##";
+            return "6D#" + cvv + "#" + akb.checkDigits + "##";
         } catch (GeneralSecurityException e) {
             Logger.suppress(e);
         }

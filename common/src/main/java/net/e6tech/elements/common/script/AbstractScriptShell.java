@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,12 +30,20 @@ import java.util.concurrent.Callable;
  * Created by futeh.
  */
 public abstract class AbstractScriptShell {
+    private static Map<String, Object> constants = new HashMap<>();
     private static Logger logger = Logger.getLogger();
     private Map<String, List<String>> knownEnvironments = new LinkedHashMap<>();
     private Scripting scripting;
     private Properties properties;
     List<Runnable> cleanup = new LinkedList<>();
     boolean loading = false;
+
+    static {
+        constants.put("SECOND", 1000L);
+        constants.put("MINUTE", 60 * 1000L);
+        constants.put("HOUR", 60 * 60 * 1000L);
+        constants.put("DAY", 24 * 60 * 60 * 1000L);
+    }
 
     protected AbstractScriptShell() {
     }
@@ -76,20 +84,38 @@ public abstract class AbstractScriptShell {
         String shellName = Introspector.decapitalize(simpleName);
         scripting.put(shellName, this);
         scripting.put("shell", this);
+        for (Map.Entry<String, Object> entry : constants.entrySet()) {
+            scripting.put(entry.getKey(), entry.getValue());
+        }
     }
 
     public Scripting getScripting() {
         return scripting;
     }
 
+    public Object eval(String expression) {
+        return getScripting().eval(expression);
+    }
+
     public boolean isLoading() {
         return loading;
     }
 
-    public void load(String str) throws ScriptException {
+    public synchronized void load(String str) throws ScriptException {
         try {
             loading = true;
             scripting.load(str);
+            onLoaded();
+        } finally {
+            loading = false;
+        }
+    }
+
+    // Same as the load, except specifying a different load directory
+    public synchronized void load(String loadDir, String str) throws ScriptException {
+        try {
+            loading = true;
+            scripting.load(loadDir, str);
             onLoaded();
         } finally {
             loading = false;
@@ -121,8 +147,13 @@ public abstract class AbstractScriptShell {
     }
 
     @SuppressWarnings("unchecked")
-    public <T> T getVariable(String key) {
+    public <T> T nullableVar(String key) {
         return (T) getScripting().get(key);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <T> Optional<T> getVariable(String key) {
+        return Optional.ofNullable(nullableVar(key));
     }
 
     public  Map<String, List<String>> defineKnownEnvironments(String str) {
@@ -149,6 +180,10 @@ public abstract class AbstractScriptShell {
     public void runAfterIfNotLoading() {
         if (!loading)
             scripting.runAfter();
+    }
+
+    public Object runClosure(Object caller, Closure closure, Object ... args) {
+        return scripting.runClosure(caller, closure, args);
     }
 
     public Object runNow(Object caller, Object callable) {

@@ -1,5 +1,5 @@
 /*
-Copyright 2015 Futeh Kao
+Copyright 2015-2019 Futeh Kao
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,12 +15,11 @@ limitations under the License.
 */
 dependencies {
     compile project(':common')
-    compile ('com.zaxxer:HikariCP:2.6.3')
-    compile group: 'com.mchange', name: 'c3p0', version: '0.9.5.2'
-    compile 'org.mariadb.jdbc:mariadb-java-client:2.0.3'
-    compile 'javax:javaee-api:7.0'
+    compile ("com.zaxxer:HikariCP:${hikariVersion}")
+    compile "org.mariadb.jdbc:mariadb-java-client:${mariadbClientVersion}"
+    compile "javax:javaee-api:${javaeeApiVersion}"
 
-    testCompile("org.junit.jupiter:junit-jupiter-api:5.0.0-M4")
-    testCompile("org.junit.platform:junit-platform-launcher:1.0.0-M4")
-    testRuntime("org.junit.jupiter:junit-jupiter-engine:5.0.0-M4")
+    testCompile "org.junit.jupiter:junit-jupiter-api:${junitJupiterVersion}"
+    testCompile "org.junit.platform:junit-platform-launcher:${junitPlatformLauncherVersion}"
+    testRuntime "org.junit.jupiter:junit-jupiter-engine:${junitJupiterVersion}"
 }
